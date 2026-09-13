@@ -1,0 +1,3349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>影院资料票根墙 · Cinema Ticket Board</title>
+
+<!-- ============ CDN 依赖 ============ -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/interactjs@1.10.27/dist/interact.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leader-line/1.0.7/leader-line.min.js"></script>
+
+<style>
+  /* ================= 基础 ================= */
+  :root{
+    --paper:#f3ead3;          /* 复古卡纸 */
+    --paper-2:#ece0c4;
+    --ink:#3a2f22;
+    --ink-soft:#6b5b43;
+    --red:#d3352c;            /* 侦探红线 */
+    --board:#191512;          /* 幕布底色 */
+  }
+  *{ -webkit-tap-highlight-color:transparent; }
+  html,body{ height:100%; }
+  body{
+    margin:0; overflow:auto;
+    background-color:var(--board);
+    font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  }
+
+  /* ================= 幕布 / 毛毡背景 ================= */
+  #board{
+    position:relative;
+    width:2600px; height:1700px;               /* 大幅画布，可滚动 */
+    background:
+      radial-gradient(1200px 800px at 20% 10%, rgba(255,220,160,.05), transparent 60%),
+      radial-gradient(1000px 700px at 85% 80%, rgba(120,40,30,.10), transparent 60%),
+      radial-gradient(ellipse at center, #241d18 0%, #1a1512 55%, #100d0b 100%);
+  }
+  /* 布纹噪点 */
+  #board::before{
+    content:""; position:absolute; inset:0; pointer-events:none; opacity:.5;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  /* 幕布褶皱（竖向光带） */
+  #board::after{
+    content:""; position:absolute; inset:0; pointer-events:none;
+    background:repeating-linear-gradient(90deg, rgba(0,0,0,.14) 0 6px, transparent 6px 130px, rgba(255,255,255,.02) 130px 140px, transparent 140px 260px);
+  }
+
+  /* ================= 票根卡片 ================= */
+  .ticket-wrap{
+    position:absolute; top:0; left:0;
+    width:236px; height:356px;
+    touch-action:none;
+    cursor:grab;
+    will-change:transform;
+    filter:drop-shadow(0 10px 14px rgba(0,0,0,.55));
+    transition:filter .2s;
+  }
+  .ticket-wrap.dragging{ cursor:grabbing; filter:drop-shadow(0 22px 26px rgba(0,0,0,.7)); }
+  .ticket-wrap.near  { filter:drop-shadow(0 0 14px rgba(211,53,44,.75)) drop-shadow(0 10px 14px rgba(0,0,0,.55)); }
+  .ticket-wrap.grouped .ticket{ outline:2px solid rgba(211,53,44,.7); outline-offset:3px; }
+  .ticket-wrap.selecting{ filter:drop-shadow(0 0 16px rgba(255,196,64,.9)) drop-shadow(0 10px 14px rgba(0,0,0,.55)); }
+
+  /* 两侧半圆缺口（mask 实现） */
+  .ticket{
+    --notch:13px;
+    width:100%; height:100%;
+    -webkit-mask:
+      radial-gradient(circle var(--notch) at 0 50%, transparent 97%, #000) 0 0/50.5% 100% no-repeat,
+      radial-gradient(circle var(--notch) at 100% 50%, transparent 97%, #000) 100% 0/50.5% 100% no-repeat;
+    mask:
+      radial-gradient(circle var(--notch) at 0 50%, transparent 97%, #000) 0 0/50.5% 100% no-repeat,
+      radial-gradient(circle var(--notch) at 100% 50%, transparent 97%, #000) 100% 0/50.5% 100% no-repeat;
+  }
+
+  /* 3D 翻转结构 */
+  .flipper{
+    width:100%; height:100%;
+    position:relative;
+    transform-style:preserve-3d;
+    transition:transform .65s cubic-bezier(.3,.7,.25,1.05);
+  }
+  .ticket-wrap.flipped .flipper{ transform:rotateY(180deg); }
+  .face{
+    position:absolute; inset:0; backface-visibility:hidden; -webkit-backface-visibility:hidden;
+    background:linear-gradient(160deg, var(--paper) 0%, var(--paper-2) 100%);
+    color:var(--ink);
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  .face.back{ transform:rotateY(180deg); }
+
+  /* 虚线内框 */
+  .face::after{
+    content:""; position:absolute; inset:7px; pointer-events:none;
+    border:1.5px dashed rgba(107,91,67,.5); border-radius:4px;
+  }
+
+  /* 胶片齿孔条 */
+  .sprocket{
+    height:16px; background:#241c13; flex:none;
+    background-image:radial-gradient(circle 3px at 9px 50%, var(--paper) 3.4px, transparent 3.8px);
+    background-size:18px 100%; background-repeat:repeat-x;
+    box-shadow:inset 0 1px 2px rgba(0,0,0,.6);
+  }
+
+  /* 图钉 */
+  .pin{
+    position:absolute; top:20px; left:50%; transform:translateX(-50%);
+    width:13px; height:13px; border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #ff8a7a, var(--red) 55%, #7d130c);
+    box-shadow:0 2px 4px rgba(0,0,0,.6);
+    z-index:5;
+  }
+
+  /* 正面版式 */
+  .admit{
+    text-align:center; font-size:10px; letter-spacing:.32em; color:var(--ink-soft);
+    padding:7px 0 4px; font-weight:600; flex:none;
+  }
+  .poster{
+    margin:2px 14px 0; flex:1; min-height:0;
+    border:1px solid rgba(58,47,34,.35); border-radius:3px;
+    background-size:cover; background-position:center;
+    box-shadow:inset 0 0 0 1px rgba(243,234,211,.25), 0 1px 3px rgba(0,0,0,.25);
+  }
+  .front-title{
+    text-align:center; padding:8px 14px 2px;
+    font-size:16px; font-weight:700; letter-spacing:.06em;
+    font-family:Georgia,"Songti SC","SimSun",serif;
+  }
+  .front-sub{
+    text-align:center; font-size:9.5px; color:var(--ink-soft);
+    letter-spacing:.14em; padding-bottom:6px; text-transform:uppercase;
+  }
+  .tear{
+    flex:none; margin:0 10px; border-top:2px dashed rgba(107,91,67,.55); position:relative;
+  }
+  .tear::before,.tear::after{
+    content:""; position:absolute; top:-7px; width:13px; height:13px; border-radius:50%;
+    background:var(--board);
+  }
+  .tear::before{ left:-17px; } .tear::after{ right:-17px; }
+  .stub{
+    flex:none; height:46px; display:flex; align-items:center; justify-content:space-between;
+    padding:0 18px;
+  }
+  .barcode{
+    width:88px; height:26px;
+    background:repeating-linear-gradient(90deg,#2b241c 0 2px,transparent 2px 4px,#2b241c 4px 7px,transparent 7px 9px,#2b241c 9px 10px,transparent 10px 14px);
+  }
+  .serial{ font-size:9px; color:var(--ink-soft); letter-spacing:.12em; text-align:right; line-height:1.5; }
+
+  /* 背面版式 */
+  .back-head{
+    flex:none; padding:26px 16px 6px; display:flex; align-items:baseline; justify-content:space-between;
+    border-bottom:1.5px solid rgba(58,47,34,.25); margin:0 12px;
+  }
+  .back-head b{ font-family:Georgia,serif; font-size:12px; letter-spacing:.2em; }
+  .back-head span{ font-size:8.5px; color:var(--ink-soft); letter-spacing:.18em; }
+  .back-body{
+    flex:1; min-height:0; overflow:auto; padding:10px 16px 6px;
+    font-size:11.5px; line-height:1.75; color:#4a3e2d; text-align:justify;
+  }
+  .back-body h4{ margin:0 0 4px; font-size:13.5px; font-family:"Songti SC",serif; letter-spacing:.05em; }
+  .back-body .src{ margin-top:6px; font-size:9.5px; color:var(--ink-soft); }
+  .tags{ flex:none; display:flex; flex-wrap:wrap; gap:5px; padding:6px 16px 10px; }
+  .tag{
+    font-size:9px; padding:2px 8px; border-radius:999px;
+    border:1px solid rgba(107,91,67,.55); color:var(--ink-soft); letter-spacing:.06em;
+  }
+  .hint-flip{
+    flex:none; text-align:center; font-size:8.5px; color:rgba(107,91,67,.7);
+    letter-spacing:.2em; padding-bottom:8px;
+  }
+
+  /* ================= 红线（LeaderLine 允许点击删除） ================= */
+  body > svg.leader-line{ pointer-events:auto !important; }
+  body > svg.leader-line path{ pointer-events:stroke; cursor:pointer; transition:stroke .15s; }
+  body > svg.leader-line path:hover{ stroke:#ff6b5e !important; }
+  body.connecting{ cursor:crosshair; }
+
+  /* ================= 工具栏 ================= */
+  #toolbar{
+    position:fixed; top:14px; left:14px; z-index:9999;
+    background:rgba(20,16,13,.88); backdrop-filter:blur(8px);
+    border:1px solid rgba(243,234,211,.15); border-radius:12px;
+    padding:10px 12px; color:#e8dcc2; width:210px;
+    box-shadow:0 8px 24px rgba(0,0,0,.5);
+  }
+  #toolbar h1{ font-size:13px; margin:0 0 2px; font-family:Georgia,serif; letter-spacing:.12em; }
+  #toolbar .sub{ font-size:9px; color:rgba(232,220,194,.55); letter-spacing:.15em; margin-bottom:8px; }
+  .tbtn{
+    display:block; width:100%; text-align:left; margin-top:6px;
+    font-size:11.5px; padding:6px 10px; border-radius:8px; cursor:pointer;
+    border:1px solid rgba(243,234,211,.2); background:transparent; color:#e8dcc2;
+    transition:all .15s;
+  }
+  .tbtn:hover{ background:rgba(243,234,211,.1); }
+  .tbtn.active{ background:var(--red); border-color:var(--red); color:#fff; }
+  #status{
+    margin-top:8px; font-size:10px; color:rgba(232,220,194,.6);
+    line-height:1.6; border-top:1px dashed rgba(243,234,211,.2); padding-top:6px;
+  }
+  #legend{
+    position:fixed; right:14px; bottom:14px; z-index:9999;
+    background:rgba(20,16,13,.85); color:rgba(232,220,194,.75);
+    font-size:10.5px; line-height:1.9; padding:10px 14px; border-radius:10px;
+    border:1px solid rgba(243,234,211,.12);
+  }
+  kbd{
+    background:rgba(243,234,211,.12); border-radius:4px; padding:0 5px;
+    font-size:10px; font-family:inherit;
+  }
+</style>
+</head>
+<body class="connecting-none">
+
+<!-- ================= 工具栏 ================= -->
+<div id="toolbar">
+  <h1>🎬 影院资料票根墙</h1>
+  <div class="sub">CINEMA TICKET BOARD</div>
+  <button class="tbtn" id="btnConnect">✂️ 连线模式：关</button>
+  <button class="tbtn" id="btnUngroup">🧷 解散全部打组</button>
+  <button class="tbtn" id="btnReset">♻️ 重置布局</button>
+  <div id="status">拖动票根移动 · 单击票根翻转<br>拖动靠近其他票根可吸附打组</div>
+</div>
+
+<div id="legend">
+  <kbd>拖动</kbd> 移动票根<br>
+  <kbd>单击</kbd> 翻转查看背面资料<br>
+  <kbd>连线模式</kbd> 依次点两张票根连线<br>
+  <kbd>点红线</kbd> 删除该连线
+</div>
+
+<!-- ================= 画布 ================= -->
+<div id="board"></div>
+
+<script>
+/* ================================================================
+ * 1. 示例数据 —— 把这里替换成你的真实影院资料即可
+ *    frontImage 留空时自动生成复古 SVG 海报
+ * ================================================================ */
+const CARDS = [
+  {
+    "id": "c1",
+    "title": "电影宫殿（Movie Palace）",
+    "sub": "1913—1932年",
+    "frontImage": "",
+    "hue": 46,
+    "glyph": "电",
+    "backContent": "1910年代—1930年代美国出现的超大规模影院建筑类型，以折中主义古典或新古典形式为主，空间上从强调外部入口、票房逐渐转向强调门厅、大厅等内部公共空间。Rapp and Rapp建筑事务所为Balaban & Katz设计了数百座电影宫，风格涵盖装饰艺术、巴洛克、埃及式、哥特式、摩尔式等多种类型，门厅与观众厅同等宏大。",
+    "source": "兰俊《美国影院发展史研究》，清华大学博士论文，2012年",
+    "tags": [
+      "#电影宫殿",
+      "#折中主义",
+      "#仪式空间",
+      "#古典形式"
+    ],
+    "x": 71,
+    "y": 70,
+    "links": []
+  },
+  {
+    "id": "c2",
+    "title": "大气影院（Atmospheric Theatre）",
+    "sub": "1920年代",
+    "frontImage": "",
+    "hue": 53,
+    "glyph": "大",
+    "backContent": "1920年代电影宫殿的变体，用投影机在天花板上投射飘动的云彩和蔚蓝天空，取代传统华丽穹顶和水晶吊灯。观众进入影厅如同进入户外庭院，银幕成为虚构天空下的焦点。代表案例包括芝加哥的Paradise Theatre等。",
+    "source": "DBpedia “Atmospheric theatre”条目；Encyclopedia of Chicago “Movie Palaces”",
+    "tags": [
+      "#虚假天空",
+      "#建筑幻觉",
+      "#沉浸空间",
+      "#环境叙事"
+    ],
+    "x": 326,
+    "y": 77,
+    "links": []
+  },
+  {
+    "id": "c3",
+    "title": "轻歌舞剧院（Vaudeville Theatre）",
+    "sub": "1890年代—1920年代",
+    "frontImage": "",
+    "hue": 20,
+    "glyph": "轻",
+    "backContent": "电影放映早期寄居于轻歌舞剧院的建筑类型。影院空间与舞台表演空间共用，电影只是穿插在杂耍、歌舞节目之间的一个段落。这一空间逻辑至今仍在部分混合业态影院中回响。",
+    "source": "《美国影院发展史研究》目录，第3章“轻歌舞剧院”",
+    "tags": [
+      "#混合演艺",
+      "#寄居空间",
+      "#节目单逻辑"
+    ],
+    "x": 572,
+    "y": 73,
+    "links": []
+  },
+  {
+    "id": "c4",
+    "title": "门脸影院（Storefront Theatre）",
+    "sub": "1900—1910年代",
+    "frontImage": "",
+    "hue": 49,
+    "glyph": "门",
+    "backContent": "利用沿街商铺门面改建的小型放映空间，常见于1900年代美国城市街区。空间狭长，银幕设在店铺尽头，入口直接面向人行道。这种“以商业门脸伪装影院功能”的空间策略，与今天商场内嵌入式影院的空间逻辑形成历史呼应。",
+    "source": "《美国影院发展史研究》目录，第3章“门脸影院”",
+    "tags": [
+      "#沿街空间",
+      "#商业伪装",
+      "#微型影院"
+    ],
+    "x": 841,
+    "y": 87,
+    "links": []
+  },
+  {
+    "id": "c5",
+    "title": "露天影院 / 汽车影院",
+    "sub": "1933年至今（美国首座1933年，中国案例集中于2010年代—2026年）",
+    "frontImage": "",
+    "hue": 11,
+    "glyph": "露",
+    "backContent": "汽车影院观众坐在各自汽车内通过调频收听和观看露天电影。北京枫花园汽车电影院拥有4个放映场地（含3D）和25米宽的凹型全钢露天巨幕，建成了全球首家3D露天电影院和全球首家巨幕露天影院。郑州首家汽车影院总占地40000平方米，两块巨幕可容纳80辆车同时观影，屏幕高17米。松江汽车影院的两块全金属银幕高10米、宽20米，“在巨幕前，爱车就像是可移动且独立的包间”。",
+    "source": "百度百科“枫花园汽车电影院”；大河网（2024、2026）；澎湃新闻（2023）",
+    "tags": [
+      "#汽车影院",
+      "#露天放映",
+      "#移动包间",
+      "#巨幕奇观"
+    ],
+    "x": 1086,
+    "y": 83,
+    "links": []
+  },
+  {
+    "id": "c6",
+    "title": "海岛露天影院",
+    "sub": "2023年",
+    "frontImage": "",
+    "hue": 8,
+    "glyph": "海",
+    "backContent": "2023年，山东田横岛建成山东首家海岛露天电影院，拥有450吋超级银幕、FM发射器，可实现汽车影院效果，枕着波涛吹着海风看电影。这一形态将“影院”嵌入自然地理空间，银幕成为海天之间的界面。",
+    "source": "半岛网，2023年",
+    "tags": [
+      "#自然剧场",
+      "#海岛空间",
+      "#地理嵌入"
+    ],
+    "x": 1318,
+    "y": 72,
+    "links": []
+  },
+  {
+    "id": "c7",
+    "title": "微型影院（Microcinema）",
+    "sub": "2020年代",
+    "frontImage": "",
+    "hue": 19,
+    "glyph": "微",
+    "backContent": "近年来欧洲出现的影院新空间趋势：影院厅趋向小型化，聚焦私密性与少数观众之间的共同体感，追求一种近乎家居感的温暖体验。这种被称为“microcinema”的空间是一种流动的、嵌入更广泛功能之中的空间，观看银幕上的投影成为智性思辨的契机，不再仅仅与个人专注有关，而是通向公共对话。",
+    "source": "Diego Terna & Luca Maria Francesco Fabris, The Plan Journal, 2026年",
+    "tags": [
+      "#微型影院",
+      "#家居感",
+      "#公共对话",
+      "#欧洲趋势"
+    ],
+    "x": 1575,
+    "y": 86,
+    "links": []
+  },
+  {
+    "id": "c8",
+    "title": "独立式影院 / 综合体影院 / 依附式影院",
+    "sub": "研究覆盖当代（约2010年代至今）",
+    "frontImage": "",
+    "hue": 44,
+    "glyph": "独",
+    "backContent": "一项以北京108家影院为对象的研究，将当代影院建筑空间归纳为三种模式：独立式（独立建筑体）、综合体（嵌入购物中心等）、依附式（依附于其他建筑功能）。这三种模式对应了影院与城市关系的三种不同姿态。",
+    "source": "《当代北京影院建筑空间模式初探》",
+    "tags": [
+      "#空间模式",
+      "#城市关系",
+      "#嵌入与独立"
+    ],
+    "x": 1818,
+    "y": 87,
+    "links": []
+  },
+  {
+    "id": "c9",
+    "title": "中国电影院空间的“四阶段”演变",
+    "sub": "1900年代至今（研究发表于2025年）",
+    "frontImage": "",
+    "hue": 18,
+    "glyph": "中",
+    "backContent": "中国电影院空间经历了四个阶段：早期茶楼戏园的“寄居者”→ 独立单体影院 → 会堂式影院 → 现代多厅影城。这一演变不仅是建筑形态的变化，更折射了电影在中国从“外来物”到“城市公共文化主体”的身份转变。",
+    "source": "《艺术探索》2025年第01期，“由他者到主体：中国电影院空间的现代化演变”",
+    "tags": [
+      "#空间现代化",
+      "#寄居者",
+      "#身份转变"
+    ],
+    "x": 90,
+    "y": 470,
+    "links": []
+  },
+  {
+    "id": "c10",
+    "title": "新艺术运动风格影厅",
+    "sub": "2020年代设计，援引1900年前后风格",
+    "frontImage": "",
+    "hue": 50,
+    "glyph": "新",
+    "backContent": "Module K设计的Beta电影院通过柔和的粉彩色调让人联想到新艺术运动（Art Nouveau）的美学语言。影院设计可以成为一种风格史的当代引用，而非简单的“现代简约”通用模板。",
+    "source": "ArchDaily “当代影院建筑中的物质文化与遗产”，2026年",
+    "tags": [
+      "#新艺术运动",
+      "#色彩空间",
+      "#风格引用"
+    ],
+    "x": 335,
+    "y": 463,
+    "links": []
+  },
+  {
+    "id": "c11",
+    "title": "工业复古风影院",
+    "sub": "2016年（设计案例）",
+    "frontImage": "",
+    "hue": 20,
+    "glyph": "工",
+    "backContent": "影院装修风格中明确可辨的一类，通常搭配柔和灯光、色彩，体现工厂元素如水泥墙、各种铁件等。南京银兴乐天国际影城（门东店）以“声音”为出发点，用红色管道塑造声音的弯曲形态，贯穿整个影院空间——声波本身是极抽象的形态，既弯曲又高高低低，设计师利用红色管道来塑造这些自由的弯曲形态。",
+    "source": "站酷“电影院装修风格”，2023年；gooood.cn “红色声波——南京银兴乐天国际影城”，2016年",
+    "tags": [
+      "#工业复古",
+      "#红色管道",
+      "#声波空间化",
+      "#抽象形态"
+    ],
+    "x": 582,
+    "y": 468,
+    "links": []
+  },
+  {
+    "id": "c12",
+    "title": "影院大堂的“扩音器”造型",
+    "sub": "2019年",
+    "frontImage": "",
+    "hue": 23,
+    "glyph": "影",
+    "backContent": "长沙银兴万影汇国际影城的设计中，设计师希望观者注意到空间中的设计形式，减少多余装饰，以一种简单的方法来表现“扩音器”的弧形——将喇叭口造型从地面延伸到天花，延伸空间中的透视关系。",
+    "source": "ArchDaily “长沙银兴万影汇国际影城 / 壹正企划”，2019年",
+    "tags": [
+      "#扩音器形态",
+      "#透视延伸",
+      "#极简叙事"
+    ],
+    "x": 818,
+    "y": 455,
+    "links": []
+  },
+  {
+    "id": "c13",
+    "title": "主题沉浸式与自然生态风格",
+    "sub": "2025年",
+    "frontImage": "",
+    "hue": 50,
+    "glyph": "主",
+    "backContent": "影院装修的风格分类中，主题沉浸式通过环境叙事让观众进入特定情境，自然生态风格则将植物、木质、水景等元素引入观影空间。这些风格类型与“大气影院”的历史逻辑一脉相承——都在构建银幕之外的第二空间。",
+    "source": "装馨家“电影院装修风格”，2025年",
+    "tags": [
+      "#主题沉浸",
+      "#自然生态",
+      "#第二空间"
+    ],
+    "x": 1081,
+    "y": 460,
+    "links": []
+  },
+  {
+    "id": "c14",
+    "title": "影院中的“索道入戏口”",
+    "sub": "2025年",
+    "frontImage": "",
+    "hue": 23,
+    "glyph": "影",
+    "backContent": "重庆万达影城大融城店设计了“索道入戏口”，仿照重庆长江索道造型，营造穿越江面般的视觉体验；影城内“雾都光影线”以轻轨车厢为灵感，两侧LED屏还原沿线城市风景。这是影院空间“在地化”的形式策略：用本地城市符号构建进入影厅的过渡仪式。",
+    "source": "人民网重庆频道，2025年",
+    "tags": [
+      "#在地化设计",
+      "#城市符号",
+      "#过渡仪式"
+    ],
+    "x": 1322,
+    "y": 456,
+    "links": []
+  },
+  {
+    "id": "c15",
+    "title": "LED冰屏与青瓷屋顶：老影院的“双面”立面",
+    "sub": "2025年",
+    "frontImage": "",
+    "hue": 54,
+    "glyph": "L",
+    "backContent": "台州黄岩影城改造中，外立面采用LED冰屏技术实现“一墙双用”——白天展现老城韵味，夜晚化身光影画布；屋顶以沙埠青瓷文化元素为灵感，以青瓷碗状发光体为设计载体。影院的建筑表皮成为一种时间性的媒介。",
+    "source": "浙江在线台州频道、台州日报，2025年",
+    "tags": [
+      "#LED冰屏",
+      "#时间性立面",
+      "#青瓷文化"
+    ],
+    "x": 1578,
+    "y": 453,
+    "links": []
+  },
+  {
+    "id": "c16",
+    "title": "平遥电影宫：工业遗产的戏剧化改造",
+    "sub": "2017—2018年建成，后续持续获奖",
+    "frontImage": "",
+    "hue": 11,
+    "glyph": "平",
+    "backContent": "由清华大学建筑设计研究院廉毅锐团队设计，以平遥国际电影展为契机，选择平遥古城内的废弃工业用地——平遥柴油机厂改造而成。增建的500人影厅延续厂区坡屋顶形式，材料以青砖砌筑为主，局部利用红砖镂空。设计师在厂区中植入一个古典传统亭子，称之为“工业艺术区内的一个戏剧化桥段”“一个虚构的电影场景”“一个反复的蒙太奇”。露天影院“站台”旁的几棵大树被专门保留，为此不惜将入口处平台设计成不对称的。",
+    "source": "中国电影报（2019）；澎湃新闻（2021）；百度百科“平遥电影宫”（2026）",
+    "tags": [
+      "#工业遗产",
+      "#戏剧化桥段",
+      "#树木保留",
+      "#坡屋顶"
+    ],
+    "x": 1830,
+    "y": 453,
+    "links": []
+  },
+  {
+    "id": "c17",
+    "title": "Yorck Kino Passage电影院：新古典主义建筑的电影重生",
+    "sub": "1908年始建，1980年代末改造，持续更新",
+    "frontImage": "",
+    "hue": 28,
+    "glyph": "Y",
+    "backContent": "柏林Yorck Kino Passage电影院所在建筑最初是建于1908年的Rixdorfer Gesellschaftshaus，两年后Excelsior Lichtspielhaus电影院在此开业。影院关闭后曾用作家具仓库，1980年代末Yorck影院集团接管并将宏伟的主放映厅恢复了往昔历史辉煌。原吧台的部分耐候钢包层被重新利用安装为面板、装饰条和固定元件，黄铜灯具和历史石膏饰线在新概念下得以修复。",
+    "source": "ArchDaily “当代影院建筑中的物质文化与遗产”，2026年",
+    "tags": [
+      "#新古典主义",
+      "#物质循环",
+      "#耐候钢再利用"
+    ],
+    "x": 79,
+    "y": 849,
+    "links": []
+  },
+  {
+    "id": "c18",
+    "title": "渔光影院：码头通道的影院化",
+    "sub": "2025年",
+    "frontImage": "",
+    "hue": 22,
+    "glyph": "渔",
+    "backContent": "“渔光影院 Fishermen Light Cinema”位于宁波象山县石浦镇渔港南路的东门码头，将原有的码头通道建筑改造为游客驿站，提供候船休息空间及零售空间，并保留码头通道功能。获2025 MUSE Design Awards建筑类适应性改造金奖。",
+    "source": "theyarchitects.com，2025年",
+    "tags": [
+      "#码头改造",
+      "#驿站影院",
+      "#通道保留"
+    ],
+    "x": 319,
+    "y": 844,
+    "links": []
+  },
+  {
+    "id": "c19",
+    "title": "M511光影汇：旧仓库的多业态集聚",
+    "sub": "2020—2025年改建",
+    "frontImage": "",
+    "hue": 40,
+    "glyph": "M",
+    "backContent": "浙江杭州一处旧仓库经过五年改建，被打造为观影、戏剧、展览、演艺等文化业态的集聚地——M511光影汇。观众来到这里不只能看到院线电影，还能参加露天音乐会、数字文博展、文化夜集市等。每个影厅都有着多业态的设计。",
+    "source": "央视网，2025年",
+    "tags": [
+      "#旧仓库改造",
+      "#多业态",
+      "#文化消费地标"
+    ],
+    "x": 571,
+    "y": 842,
+    "links": []
+  },
+  {
+    "id": "c20",
+    "title": "老电影院改造的“内部—外部”双层价值转化",
+    "sub": "2026年",
+    "frontImage": "",
+    "hue": 11,
+    "glyph": "老",
+    "backContent": "从其他城市案例看，围绕老电影院本身鲜明的建筑类型特征，存在由内部建筑空间到外部城市空间的两个层次的价值转化路径。盐城电影院老建筑改造后，中部通高空间用于放置剧场模块，两侧二层长廊底层用于图书和文创产品销售，上层用于长期布展。",
+    "source": "腾讯新闻“电影院老建筑何以翻新”，2026年",
+    "tags": [
+      "#双层转化",
+      "#通高空间",
+      "#长廊布展"
+    ],
+    "x": 835,
+    "y": 839,
+    "links": []
+  },
+  {
+    "id": "c21",
+    "title": "尉犁老电影院：“留住老味道、添上新功能”",
+    "sub": "2025年",
+    "frontImage": "",
+    "hue": 46,
+    "glyph": "尉",
+    "backContent": "新疆尉犁老电影院改造中，秉持“留住老味道、添上新功能”理念，以高延性混凝土技术加固主体，墙面门窗按原貌翻新，最大程度保留历史风貌，内部观影区配齐现代化设备。",
+    "source": "央广网新疆频道，2025年",
+    "tags": [
+      "#原貌保留",
+      "#技术加固",
+      "#新旧共存"
+    ],
+    "x": 1087,
+    "y": 841,
+    "links": []
+  },
+  {
+    "id": "c22",
+    "title": "镍币影院的“5美分空间民主”",
+    "sub": "1905—1910年代",
+    "frontImage": "",
+    "hue": 42,
+    "glyph": "镍",
+    "backContent": "1905年匹兹堡镍币影院开业首日有450人排队，第二天增至1500人。廉价镍币影院将电影推广到工人、移民等工薪阶层。一个世纪后，这些建筑不再是社区的威胁，而成为社区的构成部分。空间形式本身即携带社会民主的基因。",
+    "source": "Prospect Magazine, “Widescreen”, 2005年",
+    "tags": [
+      "#空间民主",
+      "#工人阶层",
+      "#平民娱乐"
+    ],
+    "x": 1324,
+    "y": 832,
+    "links": []
+  },
+  {
+    "id": "c23",
+    "title": "沪北电影院的“易拉宝坦白局”",
+    "sub": "2026年",
+    "frontImage": "",
+    "hue": 8,
+    "glyph": "沪",
+    "backContent": "2026年上海国际电影节期间，40年历史的沪北电影院用AI“手搓”易拉宝，把往年的“小缺点”和最新的改进对策一条条列在展板上。这些海报甚至保留了几个错别字（“戴领带”写成“带领带”）。检票口工作人员轻声提醒“手机调一下静音”；开场前20分钟循环播放文明观影宣传片；工作人员举着近一米见方的LED灯牌沿过道缓缓巡场两次，灯牌形似海底捞的生日牌，写着“请保持安静”“不要随意走动”。",
+    "source": "青年报·青春上海，2026年",
+    "tags": [
+      "#影院服务设计",
+      "#代际摩擦",
+      "#LED灯牌巡场",
+      "#易拉宝"
+    ],
+    "x": 1589,
+    "y": 837,
+    "links": []
+  },
+  {
+    "id": "c24",
+    "title": "影院作为“休闲与仪式”的双重空间",
+    "sub": "研究发表于2021年",
+    "frontImage": "",
+    "hue": 24,
+    "glyph": "影",
+    "backContent": "研究指出，休闲表征体现为人们与“日常性”的分离以及对阶层隔阂的突破；仪式表征体现为个人观影中的代入感与精神互动，以及集体观影中熟人与陌生人共同构建的社会联系。影院空间同时承载“逃离日常”与“重建联结”两种功能。",
+    "source": "张浩、林家惠、蔡晓梅，“休闲与仪式：电影院的空间生产研究”，《旅游导刊》2021年第5卷第2期",
+    "tags": [
+      "#休闲空间",
+      "#仪式空间",
+      "#社会联结"
+    ],
+    "x": 1820,
+    "y": 837,
+    "links": []
+  },
+  {
+    "id": "c25",
+    "title": "“瓦子角17号”：民间放映组织的空间实践",
+    "sub": "2020年代",
+    "frontImage": "",
+    "hue": 12,
+    "glyph": "瓦",
+    "backContent": "南昌民间放映组织“瓦子角17号”为愿意为电影驻留的观众创造彼此相遇的空间。资深影迷形容：“‘瓦子角17号’打造的是一种理想的观影环境，电影在这里被认真对待，不只是被播放，而是被理解、被讨论、被回应。”",
+    "source": "江西日报、人民网江西频道，2026年",
+    "tags": [
+      "#民间放映",
+      "#讨论空间",
+      "#影迷社群"
+    ],
+    "x": 80,
+    "y": 1218,
+    "links": []
+  },
+  {
+    "id": "c26",
+    "title": "一日连看三场：影迷的空间谋划",
+    "sub": "2026年",
+    "frontImage": "",
+    "hue": 35,
+    "glyph": "一",
+    "backContent": "一位影迷的自述：“有那么三四天，我创造了一天连看三场的纪录，精心算计好片连场的可能性，睿智地谋划好影院与影院的最佳距离。”观影行为本身成为一种城市空间实践——在影院之间穿行、计算时间、规划路线。",
+    "source": "解放日报“十日谈·光影背后的故事”，2026年",
+    "tags": [
+      "#城市漫游",
+      "#观影路线",
+      "#时间规划"
+    ],
+    "x": 338,
+    "y": 1221,
+    "links": []
+  },
+  {
+    "id": "c27",
+    "title": "博物馆里的“黑盒子”：观影惯性的空间还原",
+    "sub": "2024—2025年",
+    "frontImage": "",
+    "hue": 16,
+    "glyph": "博",
+    "backContent": "台北美术馆2024年秋天在地下楼打造艺术影院，“从零开始打造出复古售票处、电影时刻表、影厅隔音用的长廊”，将美术馆的白盒子空间通过设计转变为电影院“黑盒子”的过渡动线，使观众能从头思考长期被建构出的观影惯性，还原观影时身体动线，乃至引发观众在电影播映之前的期待与进场仪式感。",
+    "source": "酿电影专访“从白盒子走向黑盒子的实验性探索”，2025年",
+    "tags": [
+      "#白盒子到黑盒子",
+      "#观影惯性",
+      "#身体动线",
+      "#仪式还原"
+    ],
+    "x": 579,
+    "y": 1221,
+    "links": []
+  },
+  {
+    "id": "c28",
+    "title": "Invisible Cinema：全黑空间的个体观影实验",
+    "sub": "1970年",
+    "frontImage": "",
+    "hue": 19,
+    "glyph": "I",
+    "backContent": "1970年，奥地利电影人、建筑师、音乐家Peter Kubelka设计了一座实验性影厅“Invisible Cinema”——一个约90座的全黑观众厅，观众在其中以个体化方式观看投影。这是对影院“集体空间中的个体经验”的极端形式实验。",
+    "source": "Wikipedia（西班牙语）“Invisible Cinema”条目",
+    "tags": [
+      "#全黑空间",
+      "#个体观影",
+      "#实验建筑"
+    ],
+    "x": 839,
+    "y": 1218,
+    "links": []
+  },
+  {
+    "id": "c29",
+    "title": "新艺拉玛（Cinerama）：三机同步的弧形巨幕",
+    "sub": "1952年",
+    "frontImage": "",
+    "hue": 50,
+    "glyph": "新",
+    "backContent": "1952年，第一部全景电影《这就是新艺拉玛》（This Is Cinerama）在纽约百老汇首映，使用三台电影摄影机拍摄，又运用三台放映机投映在弯曲成146°角的屏幕上形成影像。这是影院空间被影像技术重新定义的开端——银幕不再是一面墙，而是一个包裹观众的弧面。",
+    "source": "网易“LED屏能把观众拉回电影院吗？”，2025年",
+    "tags": [
+      "#三机同步",
+      "#弧形银幕",
+      "#包裹空间",
+      "#全景电影"
+    ],
+    "x": 1089,
+    "y": 1230,
+    "links": []
+  },
+  {
+    "id": "c30",
+    "title": "有声电影与“维他风”系统",
+    "sub": "1926—1927年",
+    "frontImage": "",
+    "hue": 10,
+    "glyph": "有",
+    "backContent": "1926年8月6日，世界第一部有声短片《唐璜》使用“维他风”（Vitaphone）系统放映，通过唱片与胶片同步播放实现声音传递。声音的出现不仅颠覆电影美学，更改变了影院的音响系统配置和空间声学要求。",
+    "source": "新民晚报“技术革命推动电影形态变革”；山东大学博士论文",
+    "tags": [
+      "#有声电影",
+      "#维他风",
+      "#声音空间",
+      "#声学转型"
+    ],
+    "x": 1337,
+    "y": 1230,
+    "links": []
+  },
+  {
+    "id": "c31",
+    "title": "从胶片到数字：放映设备的空间痕迹",
+    "sub": "2002—2008年（过渡期）",
+    "frontImage": "",
+    "hue": 16,
+    "glyph": "从",
+    "backContent": "2008年前后，中国影院开始从胶片放映机更换为数字放映系统。数字技术大大压缩了电影制作和放映成本，使大片放映不再局限于大城市。放映设备的更替同时改变了放映间的空间需求——从需要专门隔音和通风的胶片机房，变为更紧凑的数字服务器空间。",
+    "source": "人民网“从坐小板凳看到数字化体验”，2018年；形势政策网，2025年",
+    "tags": [
+      "#胶片到数字",
+      "#放映间空间",
+      "#成本压缩"
+    ],
+    "x": 1585,
+    "y": 1217,
+    "links": []
+  },
+  {
+    "id": "c32",
+    "title": "IMAX：从70mm胶片到数字系统",
+    "sub": "1970—2008年—2020年代",
+    "frontImage": "",
+    "hue": 16,
+    "glyph": "I",
+    "backContent": "1970年，第一部IMAX“电影”——17分钟短片《虎之子》在日本诞生。2008年起，胶片IMAX被数字IMAX放映系统取代，免除了70mm笨重底片的物理限制。IMAX的杀招是超大银幕和独有的摄制标准，建立了从前期摄制到放映环境的一整套流程标准。CINITY是目前唯一支持“4K+120帧+3D”的放映格式。",
+    "source": "界面新闻“巨幕之战：数字影厅不完全进化史”，2021年；澎湃新闻“IMAX、杜比、巨幕、CINITY……电影院到底怎么选”，2023年",
+    "tags": [
+      "#IMAX",
+      "#格式政治",
+      "#技术标准化",
+      "#观众决策"
+    ],
+    "x": 1832,
+    "y": 1222,
+    "links": []
+  },
+  {
+    "id": "c33",
+    "title": "8.75毫米放映机：农村放映的空间尺度",
+    "sub": "1969—2019年",
+    "frontImage": "",
+    "hue": 23,
+    "glyph": "8",
+    "backContent": "中国农村电影放映员王树贤从1969年到2019年当了半个世纪的放映员，见证了中国农村电影放映的变迁——从8.75毫米电影胶片机、16毫米电影胶片机到数码放映机。8.75毫米胶片机极其轻便，放映空间可以是任何一块空地、一面墙、一棵树之间。这是影院空间形式的最极简版本。",
+    "source": "中国日报，2019年",
+    "tags": [
+      "#农村放映",
+      "#极简放映空间",
+      "#流动影院"
+    ],
+    "x": 88,
+    "y": 1607,
+    "links": []
+  },
+  {
+    "id": "c34",
+    "title": "上海影城：五种体型，五种声学",
+    "sub": "1993年发表（影城建成于1991年）",
+    "frontImage": "",
+    "hue": 20,
+    "glyph": "上",
+    "backContent": "上海影城是国内规模最大的多厅电影院之一，5个电影厅规模分别为1100座、500座、300座、60座及50座。1100座主厅为扇形平面，侧墙展斜角9°，体型呈前窄后宽、前高后低，是70mm电影厅的最佳体型；500厅及300厅均为钟形平面；60和50两个小厅为简单矩形。五个厅地坪均为全台阶起坡式，平均起坡0.2m，均不设楼座，也无台框。",
+    "source": "章奎生，“上海影城的建筑声学设计”，《声学技术》",
+    "tags": [
+      "#扇形平面",
+      "#钟形平面",
+      "#体型声学",
+      "#台阶起坡"
+    ],
+    "x": 339,
+    "y": 1600,
+    "links": []
+  },
+  {
+    "id": "c35",
+    "title": "声波的空间化：红色管道的形态实验",
+    "sub": "2016年",
+    "frontImage": "",
+    "hue": 9,
+    "glyph": "声",
+    "backContent": "南京银兴乐天国际影城以声音为出发点，将声波——包括演员对话、后期声效、现场收音以至配乐——转化为空间中的红色管道形态。声波本身是极抽象的形态，既弯曲又高高低低，设计师利用红色管道来塑造这些自由的弯曲形态，贯彻整个影院空间。",
+    "source": "gooood.cn，2016年",
+    "tags": [
+      "#声波可视化",
+      "#红色管道",
+      "#抽象形态空间化"
+    ],
+    "x": 575,
+    "y": 1591,
+    "links": []
+  },
+  {
+    "id": "c36",
+    "title": "星空顶与弹性减力墙：私人影音空间",
+    "sub": "2024年",
+    "frontImage": "",
+    "hue": 26,
+    "glyph": "星",
+    "backContent": "专业影音室设计中，距原墙十公分起一道龙骨墙达到中空隔音效果，在龙骨墙基础上继续做弹性减力结构达到更隔音、低频缓冲的目的。顶面前一部分做聚酯纤维吸音板星空顶，在光纤灯闪烁下搭配流星效果。前墙设计音障墙做法，让音箱隐藏于幕后。",
+    "source": "hdavchina.com “陕西延安圣地河谷金延安景区专业影音室”，2024年",
+    "tags": [
+      "#弹性减力墙",
+      "#星空顶",
+      "#音障墙",
+      "#隐藏音箱"
+    ],
+    "x": 830,
+    "y": 1598,
+    "links": []
+  },
+  {
+    "id": "c37",
+    "title": "硅砂吸声材料在CINITY影院中的应用",
+    "sub": "2026年",
+    "frontImage": "",
+    "hue": 10,
+    "glyph": "硅",
+    "backContent": "硅砂吸声材料具有高吸声性能、高材料强度、环保性能优异等优势，已用于公共大厅、展览馆等对声学有一定要求的空间，但在音乐厅、剧院、高端影院等高要求场所应用较少。CINITY影院建设案例中开始将其纳入声学设计和模组化方案。",
+    "source": "《广播电视信息》2026年S1期",
+    "tags": [
+      "#硅砂吸声",
+      "#材料创新",
+      "#CINITY"
+    ],
+    "x": 1074,
+    "y": 1608,
+    "links": []
+  },
+  {
+    "id": "c38",
+    "title": "万达影城“BE LOVED & BE RICH”：影院变艺术馆",
+    "sub": "2024—2025年",
+    "frontImage": "",
+    "hue": 51,
+    "glyph": "万",
+    "backContent": "2024年12月31日，北京CBD万达影城举办“时光里艺术家共创展”，展出70件作品，展览为期三个月，来访游客均可免费参观。展览中供等待电影开场的参观者休息的椅子被艺术家进行了涂鸦，甚至允许访客在此基础上继续创作，使其最终成为“银幕无边界”的实体象征。",
+    "source": "封面新闻，2025年；China Daily, 2025年",
+    "tags": [
+      "#影院策展",
+      "#椅子共创",
+      "#银幕无边界"
+    ],
+    "x": 1328,
+    "y": 1596,
+    "links": []
+  },
+  {
+    "id": "c39",
+    "title": "艾尚乐汀艺术影城：“美术馆策展”的影院",
+    "sub": "2025年",
+    "frontImage": "",
+    "hue": 47,
+    "glyph": "艾",
+    "backContent": "青岛银座商城五层的艾尚乐汀艺术影城，没有爆米花机轰鸣，用“美术馆策展”的审美格调与电影会所的定制服务，重塑大众对电影院的想象。以21个激光影厅为载体。",
+    "source": "中国山东网青岛频道，2025年",
+    "tags": [
+      "#美术馆格调",
+      "#无爆米花机",
+      "#定制服务"
+    ],
+    "x": 1583,
+    "y": 1602,
+    "links": []
+  },
+  {
+    "id": "c40",
+    "title": "影院走廊作为开放式展区",
+    "sub": "2026年",
+    "frontImage": "",
+    "hue": 47,
+    "glyph": "影",
+    "backContent": "2026年，萍乡传媒影城联合萍乡学院举办青年美术作品展，创新采用全域分层布展模式：影厅走廊打造为开放式大众展区，VIP厅设为精品画作专属展区，“一闹一静”形成观展节奏。观影动线转化为展览动线，候场时间转化为观看时间。",
+    "source": "萍乡日报数字报刊平台，2026年",
+    "tags": [
+      "#动线转化",
+      "#候场策展",
+      "#影院+学院"
+    ],
+    "x": 1832,
+    "y": 1594,
+    "links": []
+  },
+  {
+    "id": "c41",
+    "title": "影院大厅的“非遗市集”",
+    "sub": "2026年",
+    "frontImage": "",
+    "hue": 22,
+    "glyph": "影",
+    "backContent": "2026年春节期间，万达影城吉林昌邑店在大厅展示满族旗袍盘扣技艺，潇湘国际影城宁乡店将电影文化与本土非遗、美食融合，打造“可逛、可玩、可品、可感的复合型文化消费空间”。影院的等候区、大厅和走廊正在被重新定义为“第三空间”。",
+    "source": "今日头条、宁乡新闻网、搜狐新闻，2026年",
+    "tags": [
+      "#第三空间",
+      "#非遗市集",
+      "#复合消费"
+    ],
+    "x": 72,
+    "y": 1977,
+    "links": []
+  },
+  {
+    "id": "c42",
+    "title": "大馆石阶影院：历史古迹的表演空间",
+    "sub": "2025—2026年",
+    "frontImage": "",
+    "hue": 53,
+    "glyph": "大",
+    "backContent": "香港大馆将历史古迹化身成为独一无二的表演空间，邀请本地新晋电影人及音乐制作人筹划策展，“大馆石阶影院”利用建筑本身的石阶地形作为观众席，将古迹空间转化为放映与音乐表演的场地。",
+    "source": "大馆官网，2025/26季度",
+    "tags": [
+      "#古迹影院",
+      "#石阶观众席",
+      "#地形利用"
+    ],
+    "x": 335,
+    "y": 1987,
+    "links": []
+  },
+  {
+    "id": "c43",
+    "title": "北京民俗博物馆的“东岳艺术季”夜间观影",
+    "sub": "2026年",
+    "frontImage": "",
+    "hue": 22,
+    "glyph": "北",
+    "backContent": "北京民俗博物馆开启夜间观影活动，跳出传统文博体验模式，以沉浸式复古场景为核心，搭配经典影像展播，在古朴雅致氛围中唤醒大众时代记忆。古建空间成为放映的容器，影像与建筑遗产相互渗透。",
+    "source": "党建网，2026年",
+    "tags": [
+      "#古建放映",
+      "#沉浸式复古",
+      "#夜间观影"
+    ],
+    "x": 591,
+    "y": 1988,
+    "links": []
+  },
+  {
+    "id": "c44",
+    "title": "列斐伏尔“三元空间”与影院的对应",
+    "sub": "理论源流1974年（列斐伏尔），应用研究集中于2010年代至今",
+    "frontImage": "",
+    "hue": 33,
+    "glyph": "列",
+    "backContent": "空间实践对应影院建筑物的兴建、改造及其与城市经济的联系；空间的再现对应影院设计理念、管理制度与生产关系；再现性空间对应观众个体对影院空间的感知、经验、记忆与想象。这一框架将影院从物理建筑提升为空间生产的具体场域。",
+    "source": "张一玮提出的中国电影院史空间研究框架；张浩等《旅游导刊》2021年",
+    "tags": [
+      "#空间生产",
+      "#三元辩证法",
+      "#影院分析框架"
+    ],
+    "x": 836,
+    "y": 1982,
+    "links": []
+  },
+  {
+    "id": "c45",
+    "title": "影院的“异托邦”属性",
+    "sub": "研究发表于2020年后",
+    "frontImage": "",
+    "hue": 29,
+    "glyph": "影",
+    "backContent": "在福柯的意义上，影院可以是一个“异托邦”——一个在真实场所中被有效实现了的乌托邦，它同时是物理空间和社会想象的交汇处。这一理论工具可用于分析影院的“现实—虚构”双重属性：观众坐在真实座位上，面对虚构影像，身处一个既是现实又是非现实的空间。",
+    "source": "《瞬间的异托邦：〈一秒钟〉的“电影院”空间研究》",
+    "tags": [
+      "#异托邦",
+      "#福柯",
+      "#现实与虚构"
+    ],
+    "x": 1075,
+    "y": 1974,
+    "links": []
+  },
+  {
+    "id": "c46",
+    "title": "影院建筑的四种类型学框架",
+    "sub": "2000年代",
+    "frontImage": "",
+    "hue": 38,
+    "glyph": "影",
+    "backContent": "Chris van Uffelen在 Cinema Architecture 中提出四种影院类型学：固定焦点（fixed focus）、点焦点（spot focus）、多焦点（multi-focus）和顾客焦点（customer focus）。这一分类从观众注意力与空间组织的关系出发，为影院空间设计提供了形式分析的坐标。",
+    "source": "Chris van Uffelen, Cinema Architecture，转引自University of Maryland学术库",
+    "tags": [
+      "#类型学",
+      "#注意力空间",
+      "#焦点模式"
+    ],
+    "x": 1333,
+    "y": 1972,
+    "links": []
+  },
+  {
+    "id": "c47",
+    "title": "多厅影院的空间理念变革",
+    "sub": "1963—1988年（美国多厅时期），1990年代起中国引入",
+    "frontImage": "",
+    "hue": 54,
+    "glyph": "多",
+    "backContent": "多厅影院不仅仅是厅容量的变化，更是影院运营方式与空间构成理念的变革。观众在购票时就需要“选择”看什么，而不再是走进一个统一的大厅后发现银幕。候场走廊成为“选择的空间”，影厅编号成为“内容的标签”。",
+    "source": "万方数据“多厅影院空间架构研究”，2013年",
+    "tags": [
+      "#选择空间",
+      "#多厅逻辑",
+      "#运营空间化"
+    ],
+    "x": 1569,
+    "y": 1973,
+    "links": []
+  },
+  {
+    "id": "c48",
+    "title": "大咖啡馆首映",
+    "sub": "巴黎大咖啡馆印度厅，1895",
+    "frontImage": "",
+    "hue": 135,
+    "glyph": "大",
+    "backContent": "首批收费公映含《火车进站》等；把沙龙、咖啡馆转为暗室集体看动态影像，奠定“影院”作为共享知觉事件，而非单纯技术演示。",
+    "source": "巴黎大咖啡馆印度厅，1895",
+    "tags": [
+      "#早期放映",
+      "#公共空间"
+    ],
+    "x": 2208,
+    "y": 75,
+    "links": []
+  },
+  {
+    "id": "c49",
+    "title": "黑玛丽摄影棚",
+    "sub": "西奥兰治，1893",
+    "frontImage": "",
+    "hue": 169,
+    "glyph": "黑",
+    "backContent": "圆形黑木棚以追日采光拍短片；虽非公开放映厅，但确立“封闭光箱—表演—记录”的影院原型，接近活动照相术实验室。",
+    "source": "西奥兰治，1893",
+    "tags": [
+      "#制片",
+      "#放映前空间"
+    ],
+    "x": 2451,
+    "y": 89,
+    "links": []
+  },
+  {
+    "id": "c50",
+    "title": "柏林冬季花园",
+    "sub": "柏林Wintergarten，1895",
+    "frontImage": "",
+    "hue": 130,
+    "glyph": "柏",
+    "backContent": "兄弟以Bioscop双片门投映短片，把电影嵌入歌舞杂耍厅；强调观众席与舞台投影并存，是欧洲“娱乐场即影院”的过渡档案。",
+    "source": "柏林Wintergarten，1895",
+    "tags": [
+      "#早期投影",
+      "#杂耍空间"
+    ],
+    "x": 2700,
+    "y": 82,
+    "links": []
+  },
+  {
+    "id": "c51",
+    "title": "维塔斯科普纽约首映",
+    "sub": "Koster & Bial音乐厅，1896",
+    "frontImage": "",
+    "hue": 164,
+    "glyph": "维",
+    "backContent": "爱迪生系投影系统进正统音乐厅，海报把观众、乐队、银幕并列；电影从窥视盒走向大幕，形成“现场音乐+投光”的影院礼仪。",
+    "source": "Koster & Bial音乐厅，1896",
+    "tags": [
+      "#投影",
+      "#歌舞场"
+    ],
+    "x": 2952,
+    "y": 86,
+    "links": []
+  },
+  {
+    "id": "c52",
+    "title": "镍币影院",
+    "sub": "美国多城，约1905起",
+    "frontImage": "",
+    "hue": 142,
+    "glyph": "镍",
+    "backContent": "廉价店面放映室，五分钱入场，缩短影片与街坊距离；把电影消费日常化，也引发中产对“暗室聚集”的道德焦虑，是影院社会学起点。",
+    "source": "美国多城，约1905起",
+    "tags": [
+      "#商业放映",
+      "#大众空间"
+    ],
+    "x": 3205,
+    "y": 70,
+    "links": []
+  },
+  {
+    "id": "c53",
+    "title": "《老莫卧儿画廊》",
+    "sub": "私人/拍卖流通，1906",
+    "frontImage": "",
+    "hue": 169,
+    "glyph": "老",
+    "backContent": "绘伦敦Middlesex音乐厅放西部片，观众背影入画；最早以电影放映为题材的西洋画之一，强调“看别人看屏幕”的二级注视。",
+    "source": "私人/拍卖流通，1906",
+    "tags": [
+      "#油画",
+      "#音乐厅放映"
+    ],
+    "x": 3461,
+    "y": 73,
+    "links": []
+  },
+  {
+    "id": "c54",
+    "title": "《月球旅行记》",
+    "sub": "自家剧院体系，1902",
+    "frontImage": "",
+    "hue": 169,
+    "glyph": "月",
+    "backContent": "以剧场幻术转电影切换、叠化；其影棚与放映构成“魔术师—银幕—观众”闭环，拓展影院作为人工造梦的巴洛克空间。",
+    "source": "自家剧院体系，1902",
+    "tags": [
+      "#魔术电影",
+      "#舞台空间"
+    ],
+    "x": 3705,
+    "y": 78,
+    "links": []
+  },
+  {
+    "id": "c55",
+    "title": "斯特兰德剧院",
+    "sub": "纽约，1914",
+    "frontImage": "",
+    "hue": 167,
+    "glyph": "斯",
+    "backContent": "百万美元专映影院，替代杂耍混合场；水晶吊灯、大堂与固定座位形成“中庭仪式”，把观影提升为中产城市礼仪。",
+    "source": "纽约，1914",
+    "tags": [
+      "#电影宫",
+      "#建筑空间"
+    ],
+    "x": 3948,
+    "y": 73,
+    "links": []
+  },
+  {
+    "id": "c56",
+    "title": "格拉曼中国剧院",
+    "sub": "好莱坞，1927",
+    "frontImage": "",
+    "hue": 144,
+    "glyph": "格",
+    "backContent": "首映、手印地景化；红毯与立面把“影院”变为崇拜机制，银幕之外延伸出身体铭刻与粉丝集体注视。",
+    "source": "好莱坞，1927",
+    "tags": [
+      "#电影宫",
+      "#明星空间"
+    ],
+    "x": 2201,
+    "y": 455,
+    "links": []
+  },
+  {
+    "id": "c57",
+    "title": "Pathé Tuschinski",
+    "sub": "阿姆斯特丹，1921",
+    "frontImage": "",
+    "hue": 155,
+    "glyph": "P",
+    "backContent": "Tuschinski合艺术装饰与新艺术，彩窗浮雕营造“世俗大教堂”；强调建筑本身参与叙事，观众未看片已被空间催眠。",
+    "source": "阿姆斯特丹，1921",
+    "tags": [
+      "#装饰艺术",
+      "#电影宫"
+    ],
+    "x": 2438,
+    "y": 458,
+    "links": []
+  },
+  {
+    "id": "c58",
+    "title": "《卡里加里博士》",
+    "sub": "Decla/德国，1920",
+    "frontImage": "",
+    "hue": 158,
+    "glyph": "卡",
+    "backContent": "倾斜街道、虹膜镜头与睡眠者叙事，把“放映空间”心理化；影院不只是容器，而是错乱心智的投影面。",
+    "source": "Decla/德国，1920",
+    "tags": [
+      "#表现主义",
+      "#布景空间"
+    ],
+    "x": 2712,
+    "y": 455,
+    "links": []
+  },
+  {
+    "id": "c59",
+    "title": "Le Grand Rex",
+    "sub": "巴黎，1932",
+    "frontImage": "",
+    "hue": 158,
+    "glyph": "L",
+    "backContent": "全欧最大单厅之一，天花仿室外天穹；以建筑光学消解“室内”，让集体观众在人工星空下看片，是宏大银幕的都市仪式。",
+    "source": "巴黎，1932",
+    "tags": [
+      "#巨幕电影宫"
+    ],
+    "x": 2941,
+    "y": 470,
+    "links": []
+  },
+  {
+    "id": "c60",
+    "title": "马德里Cine Doré",
+    "sub": "1912建、1923改现代派，1989归电影资料馆",
+    "frontImage": "",
+    "hue": 145,
+    "glyph": "马",
+    "backContent": "作为西班牙国立电影资料馆放映厅，强调“影院即记忆机构”；老观众席与资料馆制度并置，连接放映与保存。",
+    "source": "1912建、1923改现代派，1989归电影资料馆",
+    "tags": [
+      "#档案影院",
+      "#修复空间"
+    ],
+    "x": 3208,
+    "y": 466,
+    "links": []
+  },
+  {
+    "id": "c61",
+    "title": "汽车影院Drive-in",
+    "sub": "新泽西Camden，1933起",
+    "frontImage": "",
+    "hue": 164,
+    "glyph": "汽",
+    "backContent": "车为座、天为幕，重构“黑暗+银幕+私域”；把影院从建筑解放为停车行为，挑战集中式集体注视与中产礼仪。",
+    "source": "新泽西Camden，1933起",
+    "tags": [
+      "#流动",
+      "#户外空间"
+    ],
+    "x": 3444,
+    "y": 454,
+    "links": []
+  },
+  {
+    "id": "c62",
+    "title": "《黑白灰光戏》",
+    "sub": "包豪豪/德国，1930",
+    "frontImage": "",
+    "hue": 149,
+    "glyph": "黑",
+    "backContent": "用旋转金属、光与机件作“电影”而非叙事；把影院降为光学校验室，预示投影空间可脱离剧情。",
+    "source": "包豪豪/德国，1930",
+    "tags": [
+      "#抽象电影",
+      "#光装置"
+    ],
+    "x": 3712,
+    "y": 455,
+    "links": []
+  },
+  {
+    "id": "c63",
+    "title": "Raumlichtkunst",
+    "sub": "1926作、2012修复",
+    "frontImage": "",
+    "hue": 160,
+    "glyph": "R",
+    "backContent": "三通道彩色几何配乐，被称为早期多媒体装置；把影院改为“可行走的乐谱”，屏幕不再唯一中心。",
+    "source": "1926作、2012修复",
+    "tags": [
+      "#抽象多频",
+      "#空间音乐"
+    ],
+    "x": 3962,
+    "y": 466,
+    "links": []
+  },
+  {
+    "id": "c64",
+    "title": "《拿破仑》",
+    "sub": "1927",
+    "frontImage": "",
+    "hue": 126,
+    "glyph": "拿",
+    "backContent": "结尾三机并投，中幕加两侧象征对照；早于Cinerama以多屏扩展视野，把“银幕边框”变政治身体尺度。",
+    "source": "1927",
+    "tags": [
+      "#三屏",
+      "#全景史诗"
+    ],
+    "x": 2207,
+    "y": 840,
+    "links": []
+  },
+  {
+    "id": "c65",
+    "title": "字母派《反概念》",
+    "sub": "Debord/Wolman，1952戛纳相关",
+    "frontImage": "",
+    "hue": 157,
+    "glyph": "字",
+    "backContent": "白色圆面配断句声轨，弃传统矩形；以球幕和非叙事挑战“正面坐看”，是情境主义对影院的去稳定。",
+    "source": "Debord/Wolman，1952戛纳相关",
+    "tags": [
+      "#情景",
+      "#圆形屏"
+    ],
+    "x": 2438,
+    "y": 833,
+    "links": []
+  },
+  {
+    "id": "c66",
+    "title": "《电影已开始？》",
+    "sub": "1959前后字母派放映",
+    "frontImage": "",
+    "hue": 149,
+    "glyph": "电",
+    "backContent": "光打侧墙、天花与观众身体，演员混入院众；销毁二维屏，把“影院”变行为场，观众成被投对象。",
+    "source": "1959前后字母派放映",
+    "tags": [
+      "#侧投",
+      "#身体银幕"
+    ],
+    "x": 2697,
+    "y": 837,
+    "links": []
+  },
+  {
+    "id": "c67",
+    "title": "《地球圣诞》",
+    "sub": "1963",
+    "frontImage": "",
+    "hue": 129,
+    "glyph": "地",
+    "backContent": "规定投影双重、彩色与即兴叠加；把放映员、胶片和观众关系脚本化，扩展影院从“作品”转向“事件”。",
+    "source": "1963",
+    "tags": [
+      "#地下电影",
+      "#投射指令"
+    ],
+    "x": 2945,
+    "y": 848,
+    "links": []
+  },
+  {
+    "id": "c68",
+    "title": "《剃刀片》",
+    "sub": "1968",
+    "frontImage": "",
+    "hue": 131,
+    "glyph": "剃",
+    "backContent": "双机对冲色频与闪光，刺激视网膜；银幕被当物理材料，影院变为生理实验间，观者注意力被频率重构。",
+    "source": "1968",
+    "tags": [
+      "#结构电影",
+      "#频闪双屏"
+    ],
+    "x": 3190,
+    "y": 845,
+    "links": []
+  },
+  {
+    "id": "c69",
+    "title": "《内与外》",
+    "sub": "1965",
+    "frontImage": "",
+    "hue": 130,
+    "glyph": "内",
+    "backContent": "两卷并行、声轨独立，削弱因果；美术馆放映时把“影院”变监控式同居观察，取消导演全知与情节闭合。",
+    "source": "1965",
+    "tags": [
+      "#双屏录像",
+      "#地下电影"
+    ],
+    "x": 3462,
+    "y": 847,
+    "links": []
+  },
+  {
+    "id": "c70",
+    "title": "《扣子偶发事件》",
+    "sub": "1965",
+    "frontImage": "",
+    "hue": 134,
+    "glyph": "扣",
+    "backContent": "Portapak跟拍按钮偶发，咖啡馆首播；把电视信号当画笔，宣告录像艺术与小型放映空间脱离影院工业。",
+    "source": "1965",
+    "tags": [
+      "#录像",
+      "#激浪"
+    ],
+    "x": 3692,
+    "y": 845,
+    "links": []
+  },
+  {
+    "id": "c71",
+    "title": "《电视佛陀》",
+    "sub": "阿姆斯特丹市立等藏，1974",
+    "frontImage": "",
+    "hue": 161,
+    "glyph": "电",
+    "backContent": "摄像机对佛像、像回传电视，实时循环；屏幕成“对照神格”的镜室，讨论再现、即时与东方知觉。",
+    "source": "阿姆斯特丹市立等藏，1974",
+    "tags": [
+      "#闭路",
+      "#自反银幕"
+    ],
+    "x": 3943,
+    "y": 838,
+    "links": []
+  },
+  {
+    "id": "c72",
+    "title": "《西斯廷教堂》",
+    "sub": "1993",
+    "frontImage": "",
+    "hue": 159,
+    "glyph": "西",
+    "backContent": "四十余幻灯/影像叠投暗厅，先于商业沉浸式大展；把教堂式空间转为媒体天顶，观众躺看，解构单一焦点银幕。",
+    "source": "1993",
+    "tags": [
+      "#多投影沉浸"
+    ],
+    "x": 2207,
+    "y": 1223,
+    "links": []
+  },
+  {
+    "id": "c73",
+    "title": "Peter Kubelka隐形影院",
+    "sub": "1970纽约Anthology，后维也纳1989/2003",
+    "frontImage": "",
+    "hue": 139,
+    "glyph": "P",
+    "backContent": "全黑、独立遮光座、消周边；让建筑“消失”，只留光轨与声，极端化“黑箱—集中注意”的影院理想型。",
+    "source": "1970纽约Anthology，后维也纳1989/2003",
+    "tags": [
+      "#观念建筑",
+      "#专注空间"
+    ],
+    "x": 2455,
+    "y": 1216,
+    "links": []
+  },
+  {
+    "id": "c74",
+    "title": "《线描锥体》",
+    "sub": "1973",
+    "frontImage": "",
+    "hue": 171,
+    "glyph": "线",
+    "backContent": "烟中投影光束由线成锥，观众绕束走；屏被废掉，投影体积化，影院成可进入的几何与呼吸场。",
+    "source": "1973",
+    "tags": [
+      "#固体光",
+      "#扩展影院"
+    ],
+    "x": 2697,
+    "y": 1222,
+    "links": []
+  },
+  {
+    "id": "c75",
+    "title": "《手榴弹》",
+    "sub": "1972",
+    "frontImage": "",
+    "hue": 168,
+    "glyph": "手",
+    "backContent": "彩色源材分三机，配合音乐与身体节奏；以多向投射打破正面坐看，使放映员动作成为作品一部分。",
+    "source": "1972",
+    "tags": [
+      "#三屏",
+      "#扩展表演"
+    ],
+    "x": 2958,
+    "y": 1221,
+    "links": []
+  },
+  {
+    "id": "c76",
+    "title": "《光乐》",
+    "sub": "1975",
+    "frontImage": "",
+    "hue": 154,
+    "glyph": "光",
+    "backContent": "黑白图形兼作光学声源，观众穿光束；影像发声、空间成乐器，影院由观看室变声波—光波共同体。",
+    "source": "1975",
+    "tags": [
+      "#双机对投",
+      "#声画一体"
+    ],
+    "x": 3204,
+    "y": 1224,
+    "links": []
+  },
+  {
+    "id": "c77",
+    "title": "《RR》",
+    "sub": "1976–85",
+    "frontImage": "",
+    "hue": 133,
+    "glyph": "R",
+    "backContent": "两画面对映构成广角抽象；以最少叙事逼出“银幕边界、同步差、眼动”，是影院知觉的减法训练。",
+    "source": "1976–85",
+    "tags": [
+      "#双屏",
+      "#极简结构"
+    ],
+    "x": 3445,
+    "y": 1217,
+    "links": []
+  },
+  {
+    "id": "c78",
+    "title": "《炼金》",
+    "sub": "1992",
+    "frontImage": "",
+    "hue": 130,
+    "glyph": "炼",
+    "backContent": "16毫米裸片现场涂化学药剂，投影变异，Köner配 projector噪声；把胶片物质、时间与厅内声场并列。",
+    "source": "1992",
+    "tags": [
+      "#现场电影",
+      "#化学银幕"
+    ],
+    "x": 3698,
+    "y": 1210,
+    "links": []
+  },
+  {
+    "id": "c79",
+    "title": "《黑蓝泛黄》",
+    "sub": "2001起代表",
+    "frontImage": "",
+    "hue": 163,
+    "glyph": "黑",
+    "backContent": "以模板、踏板、颜料改机读，把放映机当乐器；影院成为“设备音乐会”，影像生成优于成片。",
+    "source": "2001起代表",
+    "tags": [
+      "#投影仪演奏",
+      "#频闪"
+    ],
+    "x": 3955,
+    "y": 1217,
+    "links": []
+  },
+  {
+    "id": "c80",
+    "title": "《空间》",
+    "sub": "1981",
+    "frontImage": "",
+    "hue": 163,
+    "glyph": "空",
+    "backContent": "空厅中抛球长曝光成轨迹，再投影回相似暗室；以自身空间拍空间，探讨银幕内外的体积互文。",
+    "source": "1981",
+    "tags": [
+      "#长曝",
+      "#运动模型"
+    ],
+    "x": 2195,
+    "y": 1590,
+    "links": []
+  },
+  {
+    "id": "c81",
+    "title": "《24小时惊魂》",
+    "sub": "1996",
+    "frontImage": "",
+    "hue": 130,
+    "glyph": "2",
+    "backContent": "将希区柯克片拉至24小时无声慢放，有时双屏；影院成时间刑罚与反剧情钟，观众以“等待”替代“追随”。",
+    "source": "1996",
+    "tags": [
+      "#慢放",
+      "#双屏观念"
+    ],
+    "x": 2460,
+    "y": 1610,
+    "links": []
+  },
+  {
+    "id": "c82",
+    "title": "《时钟》",
+    "sub": "威尼斯金狮，2010",
+    "frontImage": "",
+    "hue": 129,
+    "glyph": "时",
+    "backContent": "剪全球影片时钟特写，实时同步真实时间；放映厅变社会钟房，进厅任意时刻皆与腕表一致，悬置叙事时间。",
+    "source": "威尼斯金狮，2010",
+    "tags": [
+      "#蒙太奇",
+      "#时基装置"
+    ],
+    "x": 2695,
+    "y": 1592,
+    "links": []
+  },
+  {
+    "id": "c83",
+    "title": "《Film》",
+    "sub": "泰特涡轮厅，2011",
+    "frontImage": "",
+    "hue": 128,
+    "glyph": "F",
+    "backContent": "11分钟无声胶片环投大厅；以模拟胶片对抗数字，把工业影院尺度转入美术馆，银幕成怀旧宇宙。",
+    "source": "泰特涡轮厅，2011",
+    "tags": [
+      "#胶片",
+      "#巨投纪念"
+    ],
+    "x": 2948,
+    "y": 1592,
+    "links": []
+  },
+  {
+    "id": "c84",
+    "title": "《Caribs Leap/Western Deep》",
+    "sub": "2002",
+    "frontImage": "",
+    "hue": 158,
+    "glyph": "C",
+    "backContent": "深矿与跳崖双线，暗厅低频包围；观众被声音带进地下身体经验，影院转为感官地理。",
+    "source": "2002",
+    "tags": [
+      "#多声",
+      "#矿坑空间"
+    ],
+    "x": 3195,
+    "y": 1598,
+    "links": []
+  },
+  {
+    "id": "c85",
+    "title": "《Pursuit》",
+    "sub": "2005",
+    "frontImage": "",
+    "hue": 168,
+    "glyph": "P",
+    "backContent": "中央投光经镜壁反射，空间定向丧失；传统座位消失，观影变漂浮追迹，接近“不可定位的银幕”。",
+    "source": "2005",
+    "tags": [
+      "#镜面暗室",
+      "#投影"
+    ],
+    "x": 3453,
+    "y": 1596,
+    "links": []
+  },
+  {
+    "id": "c86",
+    "title": "《房子》",
+    "sub": "2002",
+    "frontImage": "",
+    "hue": 160,
+    "glyph": "房",
+    "backContent": "三屏同步不同视角追家庭危机；观众转头拼合人格，影院成多主体认知实验，放弃单眼透视。",
+    "source": "2002",
+    "tags": [
+      "#三屏心理空间"
+    ],
+    "x": 3692,
+    "y": 1608,
+    "links": []
+  },
+  {
+    "id": "c87",
+    "title": "《智人智人》",
+    "sub": "威尼斯San Stae教堂，2005",
+    "frontImage": "",
+    "hue": 162,
+    "glyph": "智",
+    "backContent": "暗殿放床垫，天花板流_pop影像；把教堂中殿改影院，身体仰视、私人梦幻与宗教集体性合并。",
+    "source": "威尼斯San Stae教堂，2005",
+    "tags": [
+      "#天花投影",
+      "#躺卧空间"
+    ],
+    "x": 3953,
+    "y": 1597,
+    "links": []
+  },
+  {
+    "id": "c88",
+    "title": "《赴月/梅里爱七段》",
+    "sub": "2003",
+    "frontImage": "",
+    "hue": 156,
+    "glyph": "赴",
+    "backContent": "工作室道具重讲梅里爱登月；多屏代替单幕，影院成版画—动画—电影考古的混合工坊。",
+    "source": "2003",
+    "tags": [
+      "#九通道动画"
+    ],
+    "x": 2201,
+    "y": 1976,
+    "links": []
+  },
+  {
+    "id": "c89",
+    "title": "《天使之门》",
+    "sub": "1989",
+    "frontImage": "",
+    "hue": 132,
+    "glyph": "天",
+    "backContent": "极慢进出光门的人形，近生死阈限；虽非多屏，但在暗室以“时基图像”重建影院作为冥思间。",
+    "source": "1989",
+    "tags": [
+      "#单频录像",
+      "#慢知觉"
+    ],
+    "x": 2441,
+    "y": 1983,
+    "links": []
+  },
+  {
+    "id": "c90",
+    "title": "《放映室》",
+    "sub": "1968作、2012奥地利电影博物馆版",
+    "frontImage": "",
+    "hue": 148,
+    "glyph": "放",
+    "backContent": "只在其拍摄的那家影院放映，结尾白光与真实投影机重合；取消拷贝通用性，使“厅”成为作品不可分离部分。",
+    "source": "1968作、2012奥地利电影博物馆版",
+    "tags": [
+      "#概念电影",
+      "#在地空间"
+    ],
+    "x": 2701,
+    "y": 1983,
+    "links": []
+  },
+  {
+    "id": "c91",
+    "title": "《纽约电影》",
+    "sub": "MoMA，1939",
+    "frontImage": "",
+    "hue": 155,
+    "glyph": "纽",
+    "backContent": "引座员出神、屏上雪山残像，观众零星；以现代灯光与空座写“集体场所中的个体悬停”，是最常被引用的影院哲学画。",
+    "source": "MoMA，1939",
+    "tags": [
+      "#油画",
+      "#影院孤独"
+    ],
+    "x": 2961,
+    "y": 1971,
+    "links": []
+  },
+  {
+    "id": "c92",
+    "title": "《两排过道座》",
+    "sub": "Toledo，1927",
+    "frontImage": "",
+    "hue": 169,
+    "glyph": "两",
+    "backContent": "三人落座空厅等演，无舞台动作；取“未开始”的期待态，把影院当城市静物，时间先于剧情。",
+    "source": "Toledo，1927",
+    "tags": [
+      "#油画",
+      "#开演前"
+    ],
+    "x": 3208,
+    "y": 1990,
+    "links": []
+  },
+  {
+    "id": "c93",
+    "title": "《谢里登剧院》",
+    "sub": "Newark，1937",
+    "frontImage": "",
+    "hue": 132,
+    "glyph": "谢",
+    "backContent": "绘2000座空宫一隅；电力与有声时代的好莱坞奢华被去人化，强调建筑自身为现代宗教替代品。",
+    "source": "Newark，1937",
+    "tags": [
+      "#油画",
+      "#空放映厅"
+    ],
+    "x": 3439,
+    "y": 1982,
+    "links": []
+  },
+  {
+    "id": "c94",
+    "title": "《第一排乐团》",
+    "sub": "Hirshhorn，1951",
+    "frontImage": "",
+    "hue": 172,
+    "glyph": "第",
+    "backContent": "巨幕帘与孤立听者；虽偏音乐厅，但同属“暗厅—舞台—少数身体”谱系，可入广义影院空间档案。",
+    "source": "Hirshhorn，1951",
+    "tags": [
+      "#油画",
+      "#音乐厅"
+    ],
+    "x": 3698,
+    "y": 1973,
+    "links": []
+  },
+  {
+    "id": "c95",
+    "title": "《幕间》",
+    "sub": "SFMoMA，1963",
+    "frontImage": "",
+    "hue": 141,
+    "glyph": "幕",
+    "backContent": "独女前排侧廊等续场；把“中断”而非“叙事”入画，影院时间被拆成等待、回忆与空白。",
+    "source": "SFMoMA，1963",
+    "tags": [
+      "#油画",
+      "#中场空间"
+    ],
+    "x": 3944,
+    "y": 1976,
+    "links": []
+  },
+  {
+    "id": "c96",
+    "title": "《剧场》系列",
+    "sub": "1978–1995，含Regency 1992等",
+    "frontImage": "",
+    "hue": 160,
+    "glyph": "剧",
+    "backContent": "整场放映开快门，屏成白矩，厅内雕饰显形；以单帧收整部电影，讨论时间累积、空与仪式。",
+    "source": "1978–1995，含Regency 1992等",
+    "tags": [
+      "#长曝摄影",
+      "#银幕本体"
+    ],
+    "x": 2202,
+    "y": 2354,
+    "links": []
+  },
+  {
+    "id": "c97",
+    "title": "Dreamlands展陈语境",
+    "sub": "纽约，2016",
+    "frontImage": "",
+    "hue": 153,
+    "glyph": "D",
+    "backContent": "汇集McCall、Fischinger等近四十位，以暗室、多频、模型重定义“沉浸式影院”；非单件，但可作当代美术馆影院范式样本。",
+    "source": "纽约，2016",
+    "tags": [
+      "#黑色盒子",
+      "#策展档案"
+    ],
+    "x": 2443,
+    "y": 2358,
+    "links": []
+  },
+  {
+    "id": "c98",
+    "title": "肯·雅各布斯的“影子戏”表演电影",
+    "sub": "美国，1960s–2000s",
+    "frontImage": "",
+    "hue": 155,
+    "glyph": "肯",
+    "backContent": "在放映中加入遮片、频闪、机械玩具，让银幕产生三维幻觉。影院被还原为光与手的现场魔术，放映行为本身成为可见的主角。",
+    "source": "美国，1960s–2000s",
+    "tags": [
+      "#现场投影／魔术幻灯"
+    ],
+    "x": 2695,
+    "y": 2352,
+    "links": []
+  },
+  {
+    "id": "c99",
+    "title": "“未来影院”写作与演讲",
+    "sub": "德国，2010s",
+    "frontImage": "",
+    "hue": 154,
+    "glyph": "未",
+    "backContent": "她提出今天的“影院”已分散到手机、监控、军事屏幕与展览空间中。真正的问题不是电影是什么，而是我们如何重新夺回一个共同的观看空间。",
+    "source": "德国，2010s",
+    "tags": [
+      "#媒介理论／政治想象"
+    ],
+    "x": 2955,
+    "y": 2353,
+    "links": []
+  },
+  {
+    "id": "c100",
+    "title": "希托·斯泰尔尔的《免税艺术》与“弱影像”理论",
+    "sub": "德国，2010s",
+    "frontImage": "",
+    "hue": 129,
+    "glyph": "希",
+    "backContent": "讨论低清影像如何在全球网络中传播。影院不再是唯一的观看场所，“弱影像”在手机与社交媒体中获得新的政治能量。",
+    "source": "德国，2010s",
+    "tags": [
+      "#影像理论／数字流通"
+    ],
+    "x": 3208,
+    "y": 2367,
+    "links": []
+  },
+  {
+    "id": "c101",
+    "title": "影院午休“躺平计划”",
+    "sub": "卢米埃影城西安曲江创意谷店 · 2025年",
+    "frontImage": "",
+    "hue": 226,
+    "glyph": "影",
+    "backContent": "影院从观影空间转型为打工人的“服务型社交空间”。",
+    "source": "卢米埃影城西安曲江创意谷店 · 2025年",
+    "tags": [],
+    "x": 70,
+    "y": 1097,
+    "links": []
+  },
+  {
+    "id": "c102",
+    "title": "VIP厅午休服务",
+    "sub": "卢米埃北京芳草地店 · 2025年5月",
+    "frontImage": "",
+    "hue": 236,
+    "glyph": "V",
+    "backContent": "影院闲置时段被重新定义为“躺平经济”的物理载体。",
+    "source": "卢米埃北京芳草地店 · 2025年5月",
+    "tags": [],
+    "x": 331,
+    "y": 1105,
+    "links": []
+  },
+  {
+    "id": "c103",
+    "title": "男女分厅午休",
+    "sub": "济南幸福蓝海影城银座店 · 2026年9月",
+    "frontImage": "",
+    "hue": 256,
+    "glyph": "男",
+    "backContent": "影院座椅从“观影工具”变为“睡眠工具”，放倒的是座椅也是观影仪式感。",
+    "source": "济南幸福蓝海影城银座店 · 2026年9月",
+    "tags": [],
+    "x": 574,
+    "y": 1102,
+    "links": []
+  },
+  {
+    "id": "c104",
+    "title": "商务VIP厅午休",
+    "sub": "郑州中影尚座国际影城 · 2026年",
+    "frontImage": "",
+    "hue": 229,
+    "glyph": "商",
+    "backContent": "影院空间的“消费场景”已从电影本身滑向功能型空间租赁。",
+    "source": "郑州中影尚座国际影城 · 2026年",
+    "tags": [],
+    "x": 823,
+    "y": 1102,
+    "links": []
+  },
+  {
+    "id": "c105",
+    "title": "海底捞“9号火锅影厅”",
+    "sub": "北京亦庄龙玥城奢享影城 · 2025年",
+    "frontImage": "",
+    "hue": 226,
+    "glyph": "海",
+    "backContent": "视觉与味觉同时“占有”银幕，“黑暗+屏幕”组合从观影标配变为社交消费套餐。",
+    "source": "北京亦庄龙玥城奢享影城 · 2025年",
+    "tags": [],
+    "x": 1080,
+    "y": 1098,
+    "links": []
+  },
+  {
+    "id": "c106",
+    "title": "电影+火锅（苏州）",
+    "sub": "苏州三克映画仁恒仓街店 · 2023年12月",
+    "frontImage": "",
+    "hue": 255,
+    "glyph": "电",
+    "backContent": "餐饮消费正一步步“吃掉”影厅内部的注意力分配。",
+    "source": "苏州三克映画仁恒仓街店 · 2023年12月",
+    "tags": [],
+    "x": 1327,
+    "y": 1103,
+    "links": []
+  },
+  {
+    "id": "c107",
+    "title": "电影+火锅（珠海）",
+    "sub": "珠海中影灯塔影城横琴华发商都店 · 2025年",
+    "frontImage": "",
+    "hue": 270,
+    "glyph": "电",
+    "backContent": "影院内部的“感官秩序”被重新定义，气味与光影共存。",
+    "source": "珠海中影灯塔影城横琴华发商都店 · 2025年",
+    "tags": [],
+    "x": 1591,
+    "y": 1107,
+    "links": []
+  },
+  {
+    "id": "c108",
+    "title": "Mirra奇镜派对融合厅",
+    "sub": "北京耀莱成龙影城五棵松店 · 2025年",
+    "frontImage": "",
+    "hue": 268,
+    "glyph": "M",
+    "backContent": "电影退居为众多“可播放内容”之一，影院变为娱乐综合体。",
+    "source": "北京耀莱成龙影城五棵松店 · 2025年",
+    "tags": [],
+    "x": 1840,
+    "y": 1105,
+    "links": []
+  },
+  {
+    "id": "c109",
+    "title": "社区化影院运营",
+    "sub": "北京星典影城魏公·芳华里店 · 2025年",
+    "frontImage": "",
+    "hue": 235,
+    "glyph": "社",
+    "backContent": "影院正从“目的地消费”转型为“社区日常配套”。",
+    "source": "北京星典影城魏公·芳华里店 · 2025年",
+    "tags": [],
+    "x": 74,
+    "y": 1479,
+    "links": []
+  },
+  {
+    "id": "c110",
+    "title": "红色主题影院+国潮小店",
+    "sub": "上海杨浦四平电影院 · 2024年末",
+    "frontImage": "",
+    "hue": 239,
+    "glyph": "红",
+    "backContent": "影院从文化机构变为“国潮消费场景”的搭售空间",
+    "source": "上海杨浦四平电影院 · 2024年末",
+    "tags": [],
+    "x": 319,
+    "y": 1488,
+    "links": []
+  },
+  {
+    "id": "c111",
+    "title": "体育主题影院",
+    "sub": "上海华夏古美影剧院 · 2025年",
+    "frontImage": "",
+    "hue": 273,
+    "glyph": "体",
+    "backContent": "影院银幕变成体育赛事的放大镜，而非电影叙事的专属窗口。",
+    "source": "上海华夏古美影剧院 · 2025年",
+    "tags": [],
+    "x": 585,
+    "y": 1471,
+    "links": []
+  },
+  {
+    "id": "c112",
+    "title": "百年历史文化长廊",
+    "sub": "上海大光明电影院 · 近百年历史",
+    "frontImage": "",
+    "hue": 273,
+    "glyph": "百",
+    "backContent": "影院被迫从“放映内容”转向“展示自己”，建筑自身成为被消费的展品。",
+    "source": "上海大光明电影院 · 近百年历史",
+    "tags": [],
+    "x": 828,
+    "y": 1471,
+    "links": []
+  },
+  {
+    "id": "c113",
+    "title": "“电影活化石”",
+    "sub": "沈阳光陆电影院 · 九十年未迁址",
+    "frontImage": "",
+    "hue": 229,
+    "glyph": "电",
+    "backContent": "影院作为“文物”被陈列，比作为“影院”更有存在感。",
+    "source": "沈阳光陆电影院 · 九十年未迁址",
+    "tags": [],
+    "x": 1086,
+    "y": 1485,
+    "links": []
+  },
+  {
+    "id": "c114",
+    "title": "浙江最大影院全面关闭",
+    "sub": "杭州萧山德纳影城 · 2026年8月7日",
+    "frontImage": "",
+    "hue": 258,
+    "glyph": "浙",
+    "backContent": "曾经全国第八的影院，熄灯后也不过是“一栋空房子”。",
+    "source": "杭州萧山德纳影城 · 2026年8月7日",
+    "tags": [],
+    "x": 1334,
+    "y": 1475,
+    "links": []
+  },
+  {
+    "id": "c115",
+    "title": "周星驰投资影院关闭",
+    "sub": "杭州比高电影院运河广场店 · 2026年9月25日",
+    "frontImage": "",
+    "hue": 229,
+    "glyph": "周",
+    "backContent": "明星资本与情怀都无法抵抗租赁合约到期后的物理消失。",
+    "source": "杭州比高电影院运河广场店 · 2026年9月25日",
+    "tags": [],
+    "x": 1584,
+    "y": 1472,
+    "links": []
+  },
+  {
+    "id": "c116",
+    "title": "经营异常后关闭",
+    "sub": "绍兴时代影城迪荡店 · 2025年6月",
+    "frontImage": "",
+    "hue": 237,
+    "glyph": "经",
+    "backContent": "年租金40万已是压垮影院的最后一根稻草，而非主要成本。",
+    "source": "绍兴时代影城迪荡店 · 2025年6月",
+    "tags": [],
+    "x": 1820,
+    "y": 1489,
+    "links": []
+  },
+  {
+    "id": "c117",
+    "title": "开业超11年后关闭",
+    "sub": "佛山CGV星星影城十亩地店 · 2026年3月31日",
+    "frontImage": "",
+    "hue": 230,
+    "glyph": "开",
+    "backContent": "影院的生命周期以“租赁合同”为单位，而非以“电影”为单位。",
+    "source": "佛山CGV星星影城十亩地店 · 2026年3月31日",
+    "tags": [],
+    "x": 89,
+    "y": 1857,
+    "links": []
+  },
+  {
+    "id": "c118",
+    "title": "嘉禾院线全线结业",
+    "sub": "香港嘉禾黄埔、海运、Megabox等7家 · 2025年",
+    "frontImage": "",
+    "hue": 251,
+    "glyph": "嘉",
+    "backContent": "一个城市若容不下影院连锁品牌，电影文化便失去了物理落脚点。",
+    "source": "香港嘉禾黄埔、海运、Megabox等7家 · 2025年",
+    "tags": [],
+    "x": 321,
+    "y": 1868,
+    "links": []
+  },
+  {
+    "id": "c119",
+    "title": "五个月内第四家结业",
+    "sub": "香港MCL康怡戏院 · 2025年5月",
+    "frontImage": "",
+    "hue": 241,
+    "glyph": "五",
+    "backContent": "戏院关门的速度已超过新片上映的节奏。",
+    "source": "香港MCL康怡戏院 · 2025年5月",
+    "tags": [],
+    "x": 586,
+    "y": 1869,
+    "links": []
+  },
+  {
+    "id": "c120",
+    "title": "亚洲最宽IMAX+非遗展演",
+    "sub": "贵阳越界影城 · 2025年",
+    "frontImage": "",
+    "hue": 228,
+    "glyph": "亚",
+    "backContent": "影院想活下去，需把“银幕”变为“舞台”——非遗展演的幕布。",
+    "source": "贵阳越界影城 · 2025年",
+    "tags": [],
+    "x": 837,
+    "y": 1852,
+    "links": []
+  },
+  {
+    "id": "c121",
+    "title": "电竞与体育赛事直播",
+    "sub": "山东文旅星辉影城全省门店 · 2025年",
+    "frontImage": "",
+    "hue": 252,
+    "glyph": "电",
+    "backContent": "影院的“内容供应”从电影工业转向“屏幕可播的一切”。",
+    "source": "山东文旅星辉影城全省门店 · 2025年",
+    "tags": [],
+    "x": 1089,
+    "y": 1868,
+    "links": []
+  },
+  {
+    "id": "c122",
+    "title": "脱口秀+音乐会+儿童剧",
+    "sub": "无锡金逸影城荟聚店 · 2024-2025年",
+    "frontImage": "",
+    "hue": 262,
+    "glyph": "脱",
+    "backContent": "影院正从“电影放映厅”变为“任何需要观众和舞台的内容均可发生的地方”。",
+    "source": "无锡金逸影城荟聚店 · 2024-2025年",
+    "tags": [],
+    "x": 1334,
+    "y": 1860,
+    "links": []
+  },
+  {
+    "id": "c123",
+    "title": "球幕飞行馆+“新新剧场”",
+    "sub": "北京首都电影院城市副中心店 · 2024年初",
+    "frontImage": "",
+    "hue": 242,
+    "glyph": "球",
+    "backContent": "电影院开始“吞噬”科技馆和演艺空间的业务。",
+    "source": "北京首都电影院城市副中心店 · 2024年初",
+    "tags": [],
+    "x": 1574,
+    "y": 1860,
+    "links": []
+  },
+  {
+    "id": "c124",
+    "title": "微型电影博物馆+研学",
+    "sub": "浙江临海星远影城 · 2024年起",
+    "frontImage": "",
+    "hue": 241,
+    "glyph": "微",
+    "backContent": "影院把“影史”做成展区，是因为“正在放映的内容”已不足以留住观众。",
+    "source": "浙江临海星远影城 · 2024年起",
+    "tags": [],
+    "x": 1826,
+    "y": 1862,
+    "links": []
+  },
+  {
+    "id": "c125",
+    "title": "最廉价的王宫",
+    "sub": "张爱玲《多少恨》",
+    "frontImage": "",
+    "hue": 314,
+    "glyph": "最",
+    "backContent": "平民也能进入的奢华空间，玻璃丝绒仿云石构筑的现代宫殿。",
+    "source": "张爱玲《多少恨》",
+    "tags": [],
+    "x": 2209,
+    "y": 1110,
+    "links": []
+  },
+  {
+    "id": "c126",
+    "title": "黄色玻璃杯",
+    "sub": "张爱玲《多少恨》",
+    "frontImage": "",
+    "hue": 325,
+    "glyph": "黄",
+    "backContent": "透明易碎的质感，隐喻影院空间的虚幻与光洁。",
+    "source": "张爱玲《多少恨》",
+    "tags": [],
+    "x": 2452,
+    "y": 1100,
+    "links": []
+  },
+  {
+    "id": "c127",
+    "title": "宫怨场面",
+    "sub": "张爱玲《多少恨》",
+    "frontImage": "",
+    "hue": 354,
+    "glyph": "宫",
+    "backContent": "散场后穿堂冷落，热闹散尽后的空虚，爱情与光影同逝。",
+    "source": "张爱玲《多少恨》",
+    "tags": [],
+    "x": 2690,
+    "y": 1090,
+    "links": []
+  },
+  {
+    "id": "c128",
+    "title": "像教堂",
+    "sub": "波拉尼奥《2666》",
+    "frontImage": "",
+    "hue": 335,
+    "glyph": "像",
+    "backContent": "高天花板、石榴红帷幕、石柱与回廊，空间自带神圣感。",
+    "source": "波拉尼奥《2666》",
+    "tags": [],
+    "x": 2957,
+    "y": 1108,
+    "links": []
+  },
+  {
+    "id": "c129",
+    "title": "梦的地址",
+    "sub": "毛尖《电影院，开门》",
+    "frontImage": "",
+    "hue": 312,
+    "glyph": "梦",
+    "backContent": "承载集体乡愁与个体幻想，工业文明写给人类的情书。",
+    "source": "毛尖《电影院，开门》",
+    "tags": [],
+    "x": 3190,
+    "y": 1107,
+    "links": []
+  },
+  {
+    "id": "c130",
+    "title": "文本潜意识",
+    "sub": "毛尖《电影院，开门》",
+    "frontImage": "",
+    "hue": 319,
+    "glyph": "文",
+    "backContent": "张爱玲将影院内化为叙事心理空间，赋予人物行动逻辑",
+    "source": "毛尖《电影院，开门》",
+    "tags": [],
+    "x": 3454,
+    "y": 1098,
+    "links": []
+  },
+  {
+    "id": "c131",
+    "title": "神话穹顶",
+    "sub": "卡尔维诺《圣约翰之路》",
+    "frontImage": "",
+    "hue": 314,
+    "glyph": "神",
+    "backContent": "绘有半人马与仙女的穹顶，将观影提升至神话场域",
+    "source": "卡尔维诺《圣约翰之路》",
+    "tags": [],
+    "x": 3699,
+    "y": 1092,
+    "links": []
+  },
+  {
+    "id": "c132",
+    "title": "金属天窗",
+    "sub": "卡尔维诺《圣约翰之路》",
+    "frontImage": "",
+    "hue": 321,
+    "glyph": "金",
+    "backContent": "可开启的天窗让天空成为银幕延伸，插入冥想缝隙。",
+    "source": "卡尔维诺《圣约翰之路》",
+    "tags": [],
+    "x": 3949,
+    "y": 1099,
+    "links": []
+  },
+  {
+    "id": "c133",
+    "title": "天堂的一扇窗",
+    "sub": "苏童《露天电影》",
+    "frontImage": "",
+    "hue": 316,
+    "glyph": "天",
+    "backContent": "打谷场上的银幕为乡村夜晚打开另一个世界",
+    "source": "苏童《露天电影》",
+    "tags": [],
+    "x": 2202,
+    "y": 1487,
+    "links": []
+  },
+  {
+    "id": "c134",
+    "title": "子宫般的世界",
+    "sub": "毛尖《电影院，开门》",
+    "frontImage": "",
+    "hue": 351,
+    "glyph": "子",
+    "backContent": "封闭温暖的空间，回归原始安全感的容器。",
+    "source": "毛尖《电影院，开门》",
+    "tags": [],
+    "x": 2447,
+    "y": 1489,
+    "links": []
+  },
+  {
+    "id": "c135",
+    "title": "两种时间尺度",
+    "sub": "卡尔维诺《圣约翰之路》",
+    "frontImage": "",
+    "hue": 347,
+    "glyph": "两",
+    "backContent": "天光入天黑出，影院内外时间流速截然不同。",
+    "source": "卡尔维诺《圣约翰之路》",
+    "tags": [],
+    "x": 2704,
+    "y": 1470,
+    "links": []
+  },
+  {
+    "id": "c136",
+    "title": "黑夜减轻隔阂",
+    "sub": "卡尔维诺《圣约翰之路》",
+    "frontImage": "",
+    "hue": 348,
+    "glyph": "黑",
+    "backContent": "夜色模糊影院与现实的边界，也强化了中断感",
+    "source": "卡尔维诺《圣约翰之路》",
+    "tags": [],
+    "x": 2955,
+    "y": 1479,
+    "links": []
+  },
+  {
+    "id": "c137",
+    "title": "银幕更苍白",
+    "sub": "卡尔维诺《圣约翰之路》",
+    "frontImage": "",
+    "hue": 348,
+    "glyph": "银",
+    "backContent": "银幕世界比现实更可预见，反衬小镇生活的灰暗。",
+    "source": "卡尔维诺《圣约翰之路》",
+    "tags": [],
+    "x": 3191,
+    "y": 1474,
+    "links": []
+  },
+  {
+    "id": "c138",
+    "title": "夜是诚实的",
+    "sub": "鲁迅《日记》",
+    "frontImage": "",
+    "hue": 322,
+    "glyph": "夜",
+    "backContent": "黑夜比白昼更真实，与光影体验相呼应。",
+    "source": "鲁迅《日记》",
+    "tags": [],
+    "x": 3441,
+    "y": 1473,
+    "links": []
+  },
+  {
+    "id": "c139",
+    "title": "熄灭灯光心跳加速",
+    "sub": "波拉尼奥《2666》",
+    "frontImage": "",
+    "hue": 353,
+    "glyph": "熄",
+    "backContent": "熄灯瞬间的生理兴奋，观影仪式由此开启。",
+    "source": "波拉尼奥《2666》",
+    "tags": [],
+    "x": 3705,
+    "y": 1474,
+    "links": []
+  },
+  {
+    "id": "c140",
+    "title": "漆黑中的发光银幕",
+    "sub": "卡尔维诺《圣约翰之路》",
+    "frontImage": "",
+    "hue": 323,
+    "glyph": "漆",
+    "backContent": "黑暗中唯一的光源，构建绝对的视觉中心。",
+    "source": "卡尔维诺《圣约翰之路》",
+    "tags": [],
+    "x": 3947,
+    "y": 1489,
+    "links": []
+  },
+  {
+    "id": "c141",
+    "title": "银幕是放大镜",
+    "sub": "卡尔维诺《圣约翰之路》",
+    "frontImage": "",
+    "hue": 319,
+    "glyph": "银",
+    "backContent": "将日常放大，迫使肉眼在虚构表面不断滑动",
+    "source": "卡尔维诺《圣约翰之路》",
+    "tags": [],
+    "x": 2210,
+    "y": 1860,
+    "links": []
+  },
+  {
+    "id": "c142",
+    "title": "天堂与地狱的时间速度",
+    "sub": "波拉尼奥《2666》",
+    "frontImage": "",
+    "hue": 319,
+    "glyph": "天",
+    "backContent": "电影中的快慢两种速度，成为天堂与地狱的隐喻。",
+    "source": "波拉尼奥《2666》",
+    "tags": [],
+    "x": 2459,
+    "y": 1870,
+    "links": []
+  },
+  {
+    "id": "c143",
+    "title": "电机嗒嗒声",
+    "sub": "老舍《有声电影》",
+    "frontImage": "",
+    "hue": 322,
+    "glyph": "电",
+    "backContent": "对有声电影的误解，声音本身成为新奇对象。",
+    "source": "老舍《有声电影》",
+    "tags": [],
+    "x": 2704,
+    "y": 1865,
+    "links": []
+  },
+  {
+    "id": "c144",
+    "title": "电人巨吻",
+    "sub": "老舍《有声电影》",
+    "frontImage": "",
+    "hue": 322,
+    "glyph": "电",
+    "backContent": "银幕接吻引发观众发狂鼓掌，集体情感的宣泄。",
+    "source": "老舍《有声电影》",
+    "tags": [],
+    "x": 2939,
+    "y": 1852,
+    "links": []
+  },
+  {
+    "id": "c145",
+    "title": "鼓掌发狂",
+    "sub": "老舍《有声电影》",
+    "frontImage": "",
+    "hue": 346,
+    "glyph": "鼓",
+    "backContent": "影院内的声音爆发，构成听觉上的狂欢。",
+    "source": "老舍《有声电影》",
+    "tags": [],
+    "x": 3201,
+    "y": 1858,
+    "links": []
+  },
+  {
+    "id": "c146",
+    "title": "主题音乐高亢如登云端",
+    "sub": "黎紫书《流俗地》",
+    "frontImage": "",
+    "hue": 308,
+    "glyph": "主",
+    "backContent": "盲女以听觉“看见”世界，音乐让她如临旷野。",
+    "source": "黎紫书《流俗地》",
+    "tags": [],
+    "x": 3438,
+    "y": 1860,
+    "links": []
+  },
+  {
+    "id": "c147",
+    "title": "别殿箫鼓",
+    "sub": "张爱玲《多少恨》",
+    "frontImage": "",
+    "hue": 314,
+    "glyph": "别",
+    "backContent": "散场后远处的声音，强化宫怨般的冷清",
+    "source": "张爱玲《多少恨》",
+    "tags": [],
+    "x": 3708,
+    "y": 1858,
+    "links": []
+  },
+  {
+    "id": "c148",
+    "title": "枪声传到静寂广场",
+    "sub": "当代文学摘录",
+    "frontImage": "",
+    "hue": 316,
+    "glyph": "枪",
+    "backContent": "影院内激烈音效传到外部，制造好奇与错位。",
+    "source": "当代文学摘录",
+    "tags": [],
+    "x": 3961,
+    "y": 1864,
+    "links": []
+  },
+  {
+    "id": "c149",
+    "title": "周日钟声",
+    "sub": "艾多黎多（作品名不详）",
+    "frontImage": "",
+    "hue": 341,
+    "glyph": "周",
+    "backContent": "召唤观众进入梦幻时刻的熟悉声响。",
+    "source": "艾多黎多（作品名不详）",
+    "tags": [],
+    "x": 2210,
+    "y": 2243,
+    "links": []
+  },
+  {
+    "id": "c150",
+    "title": "森冷",
+    "sub": "黎紫书《流俗地》",
+    "frontImage": "",
+    "hue": 341,
+    "glyph": "森",
+    "backContent": "影院冷气浸透身体，寒冷成为观影的身体记忆。",
+    "source": "黎紫书《流俗地》",
+    "tags": [],
+    "x": 2438,
+    "y": 2233,
+    "links": []
+  },
+  {
+    "id": "c151",
+    "title": "瑟缩在座位",
+    "sub": "黎紫书《流俗地》",
+    "frontImage": "",
+    "hue": 310,
+    "glyph": "瑟",
+    "backContent": "寒冷与银幕灾难叙事形成双重颤栗",
+    "source": "黎紫书《流俗地》",
+    "tags": [],
+    "x": 2710,
+    "y": 2234,
+    "links": []
+  },
+  {
+    "id": "c152",
+    "title": "两手间轻轻摩挲",
+    "sub": "黎紫书《流俗地》",
+    "frontImage": "",
+    "hue": 340,
+    "glyph": "两",
+    "backContent": "黑暗中传递温度，影院是亲密关系的催化剂。",
+    "source": "黎紫书《流俗地》",
+    "tags": [],
+    "x": 2939,
+    "y": 2241,
+    "links": []
+  },
+  {
+    "id": "c153",
+    "title": "脚冰冰凉心热腾腾",
+    "sub": "毛尖《电影院，开门》",
+    "frontImage": "",
+    "hue": 343,
+    "glyph": "脚",
+    "backContent": "物理寒冷与情感炽热的矛盾共存。",
+    "source": "毛尖《电影院，开门》",
+    "tags": [],
+    "x": 3205,
+    "y": 2234,
+    "links": []
+  },
+  {
+    "id": "c154",
+    "title": "菩萨低眉",
+    "sub": "黎紫书《流俗地》",
+    "frontImage": "",
+    "hue": 333,
+    "glyph": "菩",
+    "backContent": "盲女专注“听影”的庄严神态，观影升华为宗教性专注。",
+    "source": "黎紫书《流俗地》",
+    "tags": [],
+    "x": 3442,
+    "y": 2231,
+    "links": []
+  },
+  {
+    "id": "c155",
+    "title": "步步为营的牵手",
+    "sub": "黎紫书《流俗地》",
+    "frontImage": "",
+    "hue": 325,
+    "glyph": "步",
+    "backContent": "黑暗中的牵引，影院是信任与依赖的空间。",
+    "source": "黎紫书《流俗地》",
+    "tags": [],
+    "x": 3699,
+    "y": 2231,
+    "links": []
+  },
+  {
+    "id": "c156",
+    "title": "黑暗中哑然失笑",
+    "sub": "黎紫书《流俗地》",
+    "frontImage": "",
+    "hue": 328,
+    "glyph": "黑",
+    "backContent": "共享的笑声构成独特的亲密时刻。",
+    "source": "黎紫书《流俗地》",
+    "tags": [],
+    "x": 3944,
+    "y": 2237,
+    "links": []
+  },
+  {
+    "id": "c157",
+    "title": "公共场所说话特别响亮",
+    "sub": "老舍《有声电影》",
+    "frontImage": "",
+    "hue": 348,
+    "glyph": "公",
+    "backContent": "影院作为公共空间放大了人物的社会性格。",
+    "source": "老舍《有声电影》",
+    "tags": [],
+    "x": 2191,
+    "y": 2621,
+    "links": []
+  },
+  {
+    "id": "c158",
+    "title": "看座手电筒的电已使净",
+    "sub": "老舍《有声电影》",
+    "frontImage": "",
+    "hue": 341,
+    "glyph": "看",
+    "backContent": "引座员手电耗尽，暗示观众寻找座位的漫长与混乱。",
+    "source": "老舍《有声电影》",
+    "tags": [],
+    "x": 2451,
+    "y": 2629,
+    "links": []
+  },
+  {
+    "id": "c159",
+    "title": "发现电影的记忆",
+    "sub": "卡尔维诺《圣约翰之路》",
+    "frontImage": "",
+    "hue": 353,
+    "glyph": "发",
+    "backContent": "个人记忆与电影体验互为表里。",
+    "source": "卡尔维诺《圣约翰之路》",
+    "tags": [],
+    "x": 2692,
+    "y": 2617,
+    "links": []
+  },
+  {
+    "id": "c160",
+    "title": "观众即历史",
+    "sub": "卡尔维诺《圣约翰之路》",
+    "frontImage": "",
+    "hue": 316,
+    "glyph": "观",
+    "backContent": "幻想自己是观众，而电影正是我们生活的历史。",
+    "source": "卡尔维诺《圣约翰之路》",
+    "tags": [],
+    "x": 2943,
+    "y": 2623,
+    "links": []
+  },
+  {
+    "id": "c161",
+    "title": "暑假老电影的季节",
+    "sub": "卡尔维诺《圣约翰之路》",
+    "frontImage": "",
+    "hue": 307,
+    "glyph": "暑",
+    "backContent": "夏日孤独被电影填满，影院成为精神避难所。",
+    "source": "卡尔维诺《圣约翰之路》",
+    "tags": [],
+    "x": 3193,
+    "y": 2620,
+    "links": []
+  },
+  {
+    "id": "c162",
+    "title": "梦露去世标记时代",
+    "sub": "卡尔维诺《圣约翰之路》",
+    "frontImage": "",
+    "hue": 332,
+    "glyph": "梦",
+    "backContent": "影星离世标记个人观影史的时代节点",
+    "source": "卡尔维诺《圣约翰之路》",
+    "tags": [],
+    "x": 3459,
+    "y": 2617,
+    "links": []
+  },
+  {
+    "id": "c163",
+    "title": "打谷场上的银幕",
+    "sub": "苏童《露天电影》",
+    "frontImage": "",
+    "hue": 323,
+    "glyph": "打",
+    "backContent": "乡村银幕如同天堂之窗，打开空虚夜晚",
+    "source": "苏童《露天电影》",
+    "tags": [],
+    "x": 3693,
+    "y": 2613,
+    "links": []
+  },
+  {
+    "id": "c164",
+    "title": "不美好年代的美好夜晚",
+    "sub": "苏童《露天电影》",
+    "frontImage": "",
+    "hue": 330,
+    "glyph": "不",
+    "backContent": "观影之夜成为荒诞年代中真实的生命记忆。",
+    "source": "苏童《露天电影》",
+    "tags": [],
+    "x": 3939,
+    "y": 2625,
+    "links": []
+  },
+  {
+    "id": "c165",
+    "title": "已经开映多时",
+    "sub": "张爱玲《多少恨》",
+    "frontImage": "",
+    "hue": 320,
+    "glyph": "已",
+    "backContent": "迟到者进入的不只是空间，更是一个已启动的梦。",
+    "source": "张爱玲《多少恨》",
+    "tags": [],
+    "x": 2194,
+    "y": 3004,
+    "links": []
+  },
+  {
+    "id": "c166",
+    "title": "了不起的玩具",
+    "sub": "卡夫卡《口述记录》",
+    "frontImage": "",
+    "hue": 328,
+    "glyph": "了",
+    "backContent": "电影是玩具，但快速变换妨碍“眼睛人”的观看。",
+    "source": "卡夫卡《口述记录》",
+    "tags": [],
+    "x": 2447,
+    "y": 2997,
+    "links": []
+  },
+  {
+    "id": "c167",
+    "title": "铁制百叶窗",
+    "sub": "卡夫卡《口述记录》",
+    "frontImage": "",
+    "hue": 320,
+    "glyph": "铁",
+    "backContent": "既是观看之窗，也是遮蔽真实视线的屏障。",
+    "source": "卡夫卡《口述记录》",
+    "tags": [],
+    "x": 2688,
+    "y": 2996,
+    "links": []
+  },
+  {
+    "id": "c168",
+    "title": "宗教仪式",
+    "sub": "卡波蒂（村上春树引用）",
+    "frontImage": "",
+    "hue": 331,
+    "glyph": "宗",
+    "backContent": "黑暗中与银幕对峙，灵魂被搁置在临时场所。",
+    "source": "卡波蒂（村上春树引用）",
+    "tags": [],
+    "x": 2948,
+    "y": 2998,
+    "links": []
+  },
+  {
+    "id": "c169",
+    "title": "灵魂临时场所",
+    "sub": "卡波蒂（村上春树引用）",
+    "frontImage": "",
+    "hue": 310,
+    "glyph": "灵",
+    "backContent": "影院是灵魂的临时安置地，孤独对峙成为必需。",
+    "source": "卡波蒂（村上春树引用）",
+    "tags": [],
+    "x": 3212,
+    "y": 2998,
+    "links": []
+  },
+  {
+    "id": "c170",
+    "title": "黑暗承担羞耻",
+    "sub": "毛尖《电影院，开门》",
+    "frontImage": "",
+    "hue": 328,
+    "glyph": "黑",
+    "backContent": "黑暗允许大声笑放声哭，情感释放的保护伞",
+    "source": "毛尖《电影院，开门》",
+    "tags": [],
+    "x": 3458,
+    "y": 3006,
+    "links": []
+  },
+  {
+    "id": "c171",
+    "title": "电影院关乎梦",
+    "sub": "《雨果》（毛尖引用）",
+    "frontImage": "",
+    "hue": 331,
+    "glyph": "电",
+    "backContent": "影院的本质是造梦机器，连接人类最深层的乡愁。",
+    "source": "《雨果》（毛尖引用）",
+    "tags": [],
+    "x": 3709,
+    "y": 3007,
+    "links": []
+  },
+  {
+    "id": "c172",
+    "title": "洞穴囚徒的凝视",
+    "sub": "波拉尼奥《2666》",
+    "frontImage": "",
+    "hue": 327,
+    "glyph": "洞",
+    "backContent": "观众如柏拉图洞穴中的囚徒，凝视投影误以为真实。",
+    "source": "波拉尼奥《2666》",
+    "tags": [],
+    "x": 3938,
+    "y": 2993,
+    "links": []
+  },
+  {
+    "id": "c173",
+    "title": "张爱玲让喜欢的人去电影院",
+    "sub": "毛尖《电影院，开门》",
+    "frontImage": "",
+    "hue": 322,
+    "glyph": "张",
+    "backContent": "小津让喜欢的人上饭桌，张爱玲让喜欢的人进影院。",
+    "source": "毛尖《电影院，开门》",
+    "tags": [],
+    "x": 2193,
+    "y": 3388,
+    "links": []
+  },
+  {
+    "id": "c174",
+    "title": "王佳芝与平安戏院",
+    "sub": "毛尖《电影院，开门》",
+    "frontImage": "",
+    "hue": 322,
+    "glyph": "王",
+    "backContent": "影院是王佳芝进入时代的第一眼和最后一眼，命运转折的见证者",
+    "source": "毛尖《电影院，开门》",
+    "tags": [],
+    "x": 2439,
+    "y": 3373,
+    "links": []
+  }
+];
+
+const BOARD = document.getElementById('board');
+const STORE_KEY = 'ticketBoard.v2';
+let connectMode = false;
+let selecting = null;          // 连线模式下已选中的卡片 id
+let zTop = 10;
+const lines = [];              // {a, b, line:LeaderLine}
+const cardEls = {};            // id -> wrap element
+
+/* ================================================================
+ * 2. 自动生成复古 SVG 海报（frontImage 为空时使用）
+ * ================================================================ */
+function makePoster(hue, glyph, title){
+  const s = encodeURIComponent(`
+  <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 250'>
+    <defs>
+      <linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>
+        <stop offset='0' stop-color='hsl(${hue},38%,26%)'/>
+        <stop offset='1' stop-color='hsl(${hue+30},45%,13%)'/>
+      </linearGradient>
+    </defs>
+    <rect width='200' height='250' fill='url(#g)'/>
+    <rect x="0" y="0" width="16" height="250" fill="rgba(0,0,0,.45)"/>
+    <rect x="184" y="0" width="16" height="250" fill="rgba(0,0,0,.45)"/>
+    ${[...Array(8)].map((_,i)=>`<rect x='4' y='${8+i*30}' width='8' height='14' rx='2' fill='hsl(${hue},30%,60%)' opacity='.8'/><rect x='188' y='${8+i*30}' width='8' height='14' rx='2' fill='hsl(${hue},30%,60%)' opacity='.8'/>`).join('')}
+    <circle cx='100' cy='102' r='58' fill='none' stroke='hsl(${hue},45%,72%)' stroke-width='1.4' opacity='.65'/>
+    <circle cx='100' cy='102' r='66' fill='none' stroke='hsl(${hue},45%,72%)' stroke-width='.7' opacity='.35' stroke-dasharray='3 5'/>
+    <text x='100' y='128' font-size='72' text-anchor='middle' fill='hsl(${hue},50%,82%)' font-family='Songti SC,SimSun,serif' font-weight='bold'>${glyph}</text>
+    <text x='100' y='206' font-size='13' text-anchor='middle' fill='hsl(${hue},35%,80%)' font-family='Songti SC,SimSun,serif' letter-spacing='2'>${title}</text>
+    <text x='100' y='228' font-size='8' text-anchor='middle' fill='hsl(${hue},30%,65%)' letter-spacing='4'>ADMIT ONE</text>
+  </svg>`);
+  return `url("data:image/svg+xml;charset=utf-8,${s}")`;
+}
+
+/* ================================================================
+ * 3. 渲染卡片
+ * ================================================================ */
+function renderCard(data, saved){
+  const wrap = document.createElement('div');
+  wrap.className = 'ticket-wrap';
+  wrap.dataset.id = data.id;
+
+  const x = saved?.x ?? data.x, y = saved?.y ?? data.y;
+  const rot = saved?.rot ?? (Math.random()*7 - 3.5);
+  wrap.dataset.x = x; wrap.dataset.y = y; wrap.dataset.rot = rot;
+  wrap.style.transform = `translate(${x}px, ${y}px) rotate(${rot}deg)`;
+  if(saved?.flipped) wrap.classList.add('flipped');
+
+  const poster = data.frontImage
+    ? (/^(url\(|data:)/.test(data.frontImage) ? data.frontImage : `url('${data.frontImage}')`)
+    : makePoster(data.hue, data.glyph, data.title);
+  const no = String(data.id.replace(/\D/g,'')).padStart(4,'0');
+
+  wrap.innerHTML = `
+  <div class="ticket">
+    <div class="flipper">
+      <!-- 正面 -->
+      <div class="face front">
+        <div class="pin"></div>
+        <div class="sprocket"></div>
+        <div class="admit">★ ADMIT ONE ★ 电影票根</div>
+        <div class="poster"></div>
+        <div class="front-title">${data.title}</div>
+        <div class="front-sub">${data.sub}</div>
+        <div class="tear"></div>
+        <div class="stub">
+          <div class="barcode"></div>
+          <div class="serial">NO.${no}<br>${data.sub.split('·').pop().trim()}</div>
+        </div>
+      </div>
+      <!-- 背面 -->
+      <div class="face back">
+        <div class="pin"></div>
+        <div class="back-head"><b>资料卡</b><span>ARCHIVE · NO.${no}</span></div>
+        <div class="back-body">
+          <h4>${data.title}</h4>
+          ${data.backContent}
+          <div class="src">出处：${data.source}</div>
+        </div>
+        <div class="tags">${data.tags.map(t=>`<span class="tag">${t}</span>`).join('')}</div>
+        <div class="hint-flip">— 单击返回正面 —</div>
+      </div>
+    </div>
+  </div>`;
+
+  BOARD.appendChild(wrap);
+  wrap.querySelector('.poster').style.backgroundImage = poster;   // CSSOM 赋值，避免属性解析问题
+  cardEls[data.id] = wrap;
+  return wrap;
+}
+
+/* ================================================================
+ * 4. 连线（LeaderLine）
+ * ================================================================ */
+function addLink(a, b){
+  if(a === b || hasLink(a,b)) return;
+  const line = new LeaderLine(cardEls[a], cardEls[b], {
+    color:'#d3352c', size:2, path:'straight',
+    startSocket:'auto', endSocket:'auto',
+    outline:false, startPlug:'behind', endPlug:'arrow3',
+    endPlugSize:2,
+  });
+  lines.push({a, b, line});
+  saveState();
+}
+function hasLink(a,b){ return lines.some(l => (l.a===a&&l.b===b) || (l.a===b&&l.b===a)); }
+function removeLine(l){
+  l.line.remove();
+  lines.splice(lines.indexOf(l), 1);
+  saveState();
+}
+function refreshLines(){
+  lines.forEach(l => l.line.position());
+}
+// 点红线删除（事件委托）
+document.addEventListener('click', e => {
+  const hit = e.target.closest && e.target.closest('svg.leader-line');
+  if(hit){
+    const l = lines.find(l => l.line._svg === hit || hit.contains(l.line.path));
+    if(l){ removeLine(l); setStatus('已删除一条连线'); }
+  }
+});
+
+/* ================================================================
+ * 5. 拖拽（interact.js）+ 单击翻转 + 吸附打组
+ * ================================================================ */
+const SNAP_DIST = 56;      // 吸附阈值（px，中心距）
+let dragMoved = 0;
+
+interact('.ticket-wrap').draggable({
+  inertia:false,
+  listeners:{
+    start(e){
+      dragMoved = 0;
+      const el = e.target;
+      el.classList.add('dragging');
+      el.style.zIndex = ++zTop;
+      clearNear();
+    },
+    move(e){
+      dragMoved += Math.abs(e.dx) + Math.abs(e.dy);
+      const el = e.target;
+      const x = (parseFloat(el.dataset.x)||0) + e.dx;
+      const y = (parseFloat(el.dataset.y)||0) + e.dy;
+      el.dataset.x = x; el.dataset.y = y;
+      el.style.transform = `translate(${x}px, ${y}px) rotate(${el.dataset.rot}deg)`;
+      refreshLines();
+      autoUngroup(el);
+      highlightNear(el);
+    },
+    end(e){
+      const el = e.target;
+      el.classList.remove('dragging');
+
+      // 单击（位移极小）→ 翻转 或 连线选卡
+      if(dragMoved < 8){
+        if(connectMode){ onCardPick(el); }
+        else{
+          el.classList.toggle('flipped');
+          saveState();
+        }
+      }else{
+        snapOrGroup(el);
+        saveState();
+      }
+      refreshLines();
+    }
+  }
+});
+
+// 连线模式：依次点两张卡
+function onCardPick(el){
+  const id = el.dataset.id;
+  if(!selecting){
+    selecting = id;
+    el.classList.add('selecting');
+    setStatus('已选中「' + cardTitle(id) + '」，再点另一张票根完成连线');
+  }else if(selecting === id){
+    el.classList.remove('selecting');
+    selecting = null;
+    setStatus('已取消选中');
+  }else{
+    cardEls[selecting].classList.remove('selecting');
+    addLink(selecting, id);
+    setStatus('已连线：' + cardTitle(selecting) + ' ⇋ ' + cardTitle(id));
+    selecting = null;
+  }
+}
+function cardTitle(id){ return CARDS.find(c=>c.id===id)?.title || id; }
+
+// 靠近高亮
+function highlightNear(el){
+  clearNear();
+  const n = nearestCard(el, SNAP_DIST);
+  if(n){ el.classList.add('near'); n.classList.add('near'); }
+}
+function clearNear(){
+  document.querySelectorAll('.ticket-wrap.near').forEach(e=>e.classList.remove('near'));
+}
+function nearestCard(el, maxDist){
+  const r = el.getBoundingClientRect();
+  const cx = r.left + r.width/2, cy = r.top + r.height/2;
+  let best = null, bd = maxDist;
+  for(const id in cardEls){
+    const o = cardEls[id];
+    if(o === el) continue;
+    const or = o.getBoundingClientRect();
+    const d = Math.hypot(cx - (or.left + or.width/2), cy - (or.top + or.height/2));
+    if(d < bd){ bd = d; best = o; }
+  }
+  return best;
+}
+
+// 松手时：距离够近 → 吸附贴靠 + 打组
+function snapOrGroup(el){
+  const n = nearestCard(el, SNAP_DIST);
+  if(!n) return;
+
+  const er = el.getBoundingClientRect(), nr = n.getBoundingClientRect();
+  const GAP = 12;
+  let dx = 0, dy = 0;
+  const dxr = (er.left + er.width/2) - (nr.left + nr.width/2);
+  const dyr = (er.top + er.height/2) - (nr.top + nr.height/2);
+  if(Math.abs(dxr) > Math.abs(dyr)){
+    dx = dxr > 0 ? (nr.right - er.left + GAP) : (nr.left - er.right - GAP);
+  }else{
+    dy = dyr > 0 ? (nr.bottom - er.top + GAP) : (nr.top - er.bottom - GAP);
+  }
+  const x = parseFloat(el.dataset.x) + dx;
+  const y = parseFloat(el.dataset.y) + dy;
+  el.dataset.x = x; el.dataset.y = y;
+  el.dataset.rot = 0;                       // 打组后摆正，呈档案叠放感
+  el.style.transform = `translate(${x}px, ${y}px) rotate(0deg)`;
+
+  el.classList.add('grouped'); n.classList.add('grouped');
+  clearNear();
+  setStatus('已吸附打组：' + cardTitle(el.dataset.id) + ' + ' + cardTitle(n.dataset.id));
+}
+// 拖动中若已远离所有伙伴 → 自动拆组
+function autoUngroup(el){
+  if(!el.classList.contains('grouped')) return;
+  if(!nearestCard(el, 140)) el.classList.remove('grouped');
+}
+
+/* ================================================================
+ * 6. 工具栏
+ * ================================================================ */
+const btnConnect = document.getElementById('btnConnect');
+btnConnect.addEventListener('click', () => {
+  connectMode = !connectMode;
+  btnConnect.textContent = '✂️ 连线模式：' + (connectMode ? '开' : '关');
+  btnConnect.classList.toggle('active', connectMode);
+  document.body.classList.toggle('connecting', connectMode);
+  if(!connectMode && selecting){ cardEls[selecting]?.classList.remove('selecting'); selecting = null; }
+  setStatus(connectMode ? '连线模式：依次单击两张票根建立红线关联' : '拖动票根移动 · 单击票根翻转');
+});
+document.getElementById('btnUngroup').addEventListener('click', () => {
+  document.querySelectorAll('.ticket-wrap.grouped').forEach(e => e.classList.remove('grouped'));
+  setStatus('已解散所有打组（连线保留，点红线可删）');
+});
+document.getElementById('btnReset').addEventListener('click', () => {
+  localStorage.removeItem(STORE_KEY);
+  location.reload();
+});
+function setStatus(html){ document.getElementById('status').innerHTML = html; }
+
+/* ================================================================
+ * 7. 状态持久化（localStorage）
+ * ================================================================ */
+function saveState(){
+  const pos = {};
+  for(const id in cardEls){
+    const el = cardEls[id];
+    pos[id] = { x:+el.dataset.x, y:+el.dataset.y, rot:+el.dataset.rot,
+                flipped:el.classList.contains('flipped') };
+  }
+  localStorage.setItem(STORE_KEY, JSON.stringify({
+    pos, links: lines.map(l => [l.a, l.b])
+  }));
+}
+function loadState(){
+  try{ return JSON.parse(localStorage.getItem(STORE_KEY)); }catch(e){ return null; }
+}
+
+/* ================================================================
+ * 8. 初始化
+ * ================================================================ */
+(function init(){
+  const saved = loadState();
+  CARDS.forEach(c => renderCard(c, saved?.pos?.[c.id]));
+
+  // 按卡片实际分布自动扩展画布，避免卡片出界或重叠
+  let maxX = 0, maxY = 0;
+  CARDS.forEach(c => {
+    const el = cardEls[c.id];
+    maxX = Math.max(maxX, +el.dataset.x + 300);
+    maxY = Math.max(maxY, +el.dataset.y + 420);
+  });
+  BOARD.style.width  = Math.max(2600, maxX + 120) + 'px';
+  BOARD.style.height = Math.max(1700, maxY + 80) + 'px';
+
+  // 初始连线：优先恢复存档，否则用数据里的 links
+  const initial = saved?.links?.length
+    ? saved.links
+    : CARDS.flatMap(c => (c.links||[]).map(t => [c.id, t]));
+  requestAnimationFrame(() => initial.forEach(([a,b]) => {
+    if(cardEls[a] && cardEls[b]) addLink(a,b);
+  }));
+
+  window.addEventListener('resize', refreshLines);
+})();
+</script>
+</body>
+</html>
